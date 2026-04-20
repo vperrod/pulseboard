@@ -14,6 +14,7 @@ export function Register() {
   const [scanning, setScanning] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState('');
+  const [showOnlyHR, setShowOnlyHR] = useState(true);
 
   // Check for returning user
   useEffect(() => {
@@ -32,6 +33,20 @@ export function Register() {
         .catch(() => localStorage.removeItem('pulseboard_user_id'));
     }
   }, []);
+
+  // Auto-refresh scan results every 3s when on the scan step
+  useEffect(() => {
+    if (step !== 'scan') return;
+    const interval = setInterval(async () => {
+      try {
+        const devs: ScannedDevice[] = await scanDevices();
+        setDevices(devs);
+      } catch {
+        // silently ignore refresh errors
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [step]);
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
@@ -184,9 +199,19 @@ export function Register() {
                 </button>
               </div>
 
-              <p className="text-text-dim text-sm mb-4">
+              <p className="text-text-dim text-sm mb-3">
                 Make sure HR broadcast is enabled on your watch. Tap your device below.
               </p>
+
+              <label className="flex items-center gap-2 text-sm text-text-dim cursor-pointer mb-4">
+                <input
+                  type="checkbox"
+                  checked={showOnlyHR}
+                  onChange={(e) => setShowOnlyHR(e.target.checked)}
+                  className="accent-accent"
+                />
+                Only show HR-capable devices
+              </label>
 
               {devices.length === 0 && !scanning && (
                 <div className="text-center py-8 text-text-dim text-sm">
@@ -203,7 +228,7 @@ export function Register() {
               )}
 
               <div className="space-y-2">
-                {devices.map((d) => (
+                {(showOnlyHR ? devices.filter(d => d.has_hr_service) : devices).map((d) => (
                   <button
                     key={d.address}
                     onClick={() => handleClaim(d)}
@@ -219,20 +244,39 @@ export function Register() {
                   >
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="font-medium text-sm">{d.name || 'Unknown device'}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-medium text-sm">{d.name || 'Unknown device'}</div>
+                          {d.has_hr_service && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-red-500/15 text-red-400">
+                              HR
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-text-dim font-mono" style={{ fontFamily: 'var(--font-mono)' }}>
                           {d.address}
                         </div>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right flex items-center gap-3">
+                        {d.heart_rate_preview !== null && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-red-400 animate-pulse">♥</span>
+                            <span className="font-mono text-lg font-bold tabular-nums text-red-400" style={{ fontFamily: 'var(--font-mono)' }}>
+                              {d.heart_rate_preview}
+                            </span>
+                            <span className="text-[10px] text-text-dim font-mono">bpm</span>
+                          </div>
+                        )}
+                        {d.heart_rate_preview === null && d.has_hr_service && (
+                          <span className="text-xs text-text-dim">Connecting…</span>
+                        )}
                         {d.rssi < 0 && (
                           <div className="text-xs text-text-dim">{d.rssi} dBm</div>
                         )}
                         {d.claimed_by && d.claimed_by !== userId && (
-                          <div className="text-xs text-zone-5">In use</div>
+                          <div className="text-xs text-red-400">In use</div>
                         )}
                         {d.claimed_by === userId && (
-                          <div className="text-xs text-zone-3">Your device</div>
+                          <div className="text-xs text-green-400">Your device</div>
                         )}
                       </div>
                     </div>

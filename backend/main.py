@@ -61,6 +61,8 @@ manager = ConnectionManager()
 live_metrics: dict[str, LiveMetric] = {}
 # device_address → last-seen timestamp (for signal-lost detection)
 last_seen: dict[str, float] = {}
+# device_address → latest raw HR reading (for scan preview, even unclaimed devices)
+device_hr_preview: dict[str, int] = {}
 
 SIGNAL_LOST_SECONDS = 10
 
@@ -92,9 +94,12 @@ async def on_metric_callback(device_address: str, heart_rate: int, power: int | 
 
     last_seen[device_address] = time.time()
 
+    # Always track raw HR for scan preview (even unclaimed devices)
+    if heart_rate > 0:
+        device_hr_preview[device_address] = heart_rate
+
     mapping = await db.get_device_mapping_by_address(device_address)
     if not mapping:
-        # Unknown device — still track it so it shows in scan results
         return
 
     user = await db.get_user(mapping.user_id)
@@ -181,13 +186,18 @@ async def scan_devices():
 
     result = []
     for d in discovered:
+        addr = d["address"]
         result.append(ScannedDevice(
-            address=d["address"],
+            address=addr,
             name=d["name"],
             rssi=d.get("rssi", 0),
             services=d.get("services", []),
-            claimed_by=mapping_lookup.get(d["address"]),
+            claimed_by=mapping_lookup.get(addr),
+            heart_rate_preview=device_hr_preview.get(addr),
+            has_hr_service="0000180d" in " ".join(d.get("services", [])),
         ))
+    # Sort: HR-capable devices first, then those with a reading, then by signal
+    result.sort(key=lambda x: (not x.has_hr_service, x.heart_rate_preview is None, x.rssi))
     return result
 
 

@@ -16,6 +16,8 @@ export interface ScannedDevice {
   rssi: number;
   services: string[];
   claimed_by: string | null;
+  heart_rate_preview: number | null;
+  has_hr_service: boolean;
 }
 
 export interface UserProfile {

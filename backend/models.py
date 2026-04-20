@@ -65,6 +65,8 @@ class ScannedDevice(BaseModel):
     rssi: int = 0
     services: list[str] = []
     claimed_by: str | None = None  # user_id if already claimed
+    heart_rate_preview: int | None = None  # live HR for identification
+    has_hr_service: bool = False  # whether device advertises HR service
 
 
 class UserProfile(BaseModel):
