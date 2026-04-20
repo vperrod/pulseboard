@@ -78,29 +78,34 @@ class BLEScanner:
     async def _scan_and_connect(self) -> None:
         """Discover BLE devices advertising HR or Power services."""
         try:
-            devices = await BleakScanner.discover(timeout=4.0)
+            results = await BleakScanner.discover(timeout=4.0, return_adv=True)
         except Exception:
             logger.exception("BLE scan failed")
             return
 
-        for device in devices:
+        for device, adv in results.values():
             addr = device.address
-            name = device.name or "Unknown"
+            name = device.name or adv.local_name or "Unknown"
+            service_uuids = [str(u) for u in adv.service_uuids] if adv.service_uuids else []
 
-            # Track all discovered HR/Power devices
-            self._discovered[addr] = {
-                "address": addr,
-                "name": name,
-                "rssi": device.rssi if hasattr(device, "rssi") else 0,
-                "services": [],
-            }
+            # Track all discovered devices that advertise HR or Power
+            has_hr = any(HR_SERVICE_UUID in u for u in service_uuids)
+            has_power = any(POWER_SERVICE_UUID in u for u in service_uuids)
 
-            # If already connected, skip
-            if addr in self._clients and self._clients[addr].is_connected:
-                continue
+            if has_hr or has_power:
+                self._discovered[addr] = {
+                    "address": addr,
+                    "name": name,
+                    "rssi": adv.rssi,
+                    "services": service_uuids,
+                }
 
-            # Try to connect and subscribe
-            asyncio.create_task(self._connect_device(device))
+                # If already connected, skip
+                if addr in self._clients and self._clients[addr].is_connected:
+                    continue
+
+                # Try to connect and subscribe
+                asyncio.create_task(self._connect_device(device))
 
     async def _connect_device(self, device: BLEDevice) -> None:
         """Connect to a single BLE device and subscribe to HR/Power notifications."""

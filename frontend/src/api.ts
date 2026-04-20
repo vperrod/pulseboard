@@ -36,3 +36,13 @@ export async function claimDevice(userId: string, deviceAddress: string, deviceN
   });
   return res.json();
 }
+
+export async function listUsers(): Promise<import('./types').UserProfile[]> {
+  const res = await fetch(`${BASE}/api/users`);
+  return res.json();
+}
+
+export async function deleteUser(userId: string) {
+  const res = await fetch(`${BASE}/api/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+  return res.json();
+}

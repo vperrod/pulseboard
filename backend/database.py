@@ -90,6 +90,14 @@ async def list_users() -> list[User]:
         return [User(id=r["id"], name=r["name"], max_hr=r["max_hr"]) for r in rows]
 
 
+async def delete_user(user_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM device_mappings WHERE user_id = ?", (user_id,))
+        cursor = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
 # ── Device Mappings ──────────────────────────────────────────────────
 
 

@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+frontend/node_modules
+frontend/.vite
+data/
+*.db
+ble_test.py
+test_push.py
+app_logs/
+app-logs/
+pf-logs/
+webapp-logs/

@@ -21,12 +21,20 @@ export function Dashboard() {
               : 'Waiting for devices…'}
           </p>
         </div>
-        <a
-          href="/register"
-          className="px-4 py-2 rounded-xl text-sm font-semibold border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
-        >
-          + Join
-        </a>
+        <div className="flex gap-3">
+          <a
+            href="/admin"
+            className="px-4 py-2 rounded-xl text-sm font-semibold border border-border text-text-dim hover:text-text hover:border-accent/30 transition-colors"
+          >
+            Admin
+          </a>
+          <a
+            href="/register"
+            className="px-4 py-2 rounded-xl text-sm font-semibold border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
+          >
+            + Join
+          </a>
+        </div>
       </header>
 
       {/* Cards grid — responsive: 1 col phone, 2 tablet, 3–4 desktop, 5–6 TV */}
