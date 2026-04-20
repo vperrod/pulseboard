@@ -86,7 +86,14 @@ export function useWebBluetooth(
       setConnected(true);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Connection failed';
-      if (!msg.includes('cancel')) {
+      if (msg.includes('cancel')) {
+        // user cancelled picker — not an error
+      } else if (msg.includes('No Characteristics') || msg.includes('Characteristic')) {
+        setError(
+          `${nameRef.current} doesn't support standard BLE heart rate streaming. ` +
+          'Garmin watches need the local scanner (scanner.py) instead.',
+        );
+      } else {
         setError(msg);
       }
     } finally {

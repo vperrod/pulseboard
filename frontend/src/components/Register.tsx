@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
-import { registerUser, scanDevices, claimDevice, getProfile, updateProfile } from '../api';
-import type { ScannedDevice, UserProfile } from '../types';
+import { registerUser, claimDevice, getProfile, updateProfile } from '../api';
+import type { UserProfile } from '../types';
 
-type Step = 'form' | 'scan' | 'done';
+type Step = 'form' | 'pair' | 'done';
+
+const bleSupported =
+  typeof navigator !== 'undefined' && navigator.bluetooth !== undefined;
 
 export function Register() {
   const [step, setStep] = useState<Step>('form');
@@ -10,11 +13,9 @@ export function Register() {
   const [maxHr, setMaxHr] = useState(190);
   const [age, setAge] = useState('');
   const [userId, setUserId] = useState('');
-  const [devices, setDevices] = useState<ScannedDevice[]>([]);
-  const [scanning, setScanning] = useState(false);
+  const [pairing, setPairing] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [error, setError] = useState('');
-  const [showOnlyHR, setShowOnlyHR] = useState(true);
 
   // Check for returning user
   useEffect(() => {
@@ -34,20 +35,6 @@ export function Register() {
     }
   }, []);
 
-  // Auto-refresh scan results every 3s when on the scan step
-  useEffect(() => {
-    if (step !== 'scan') return;
-    const interval = setInterval(async () => {
-      try {
-        const devs: ScannedDevice[] = await scanDevices();
-        setDevices(devs);
-      } catch {
-        // silently ignore refresh errors
-      }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [step]);
-
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setError('');
@@ -63,31 +50,36 @@ export function Register() {
       setUserId(p.id);
       setProfile(p);
       localStorage.setItem('pulseboard_user_id', p.id);
-      setStep('done');
+      setStep('pair');
     } catch {
       setError('Registration failed. Please try again.');
     }
   }
 
-  async function doScan() {
-    setScanning(true);
+  async function handlePairWatch() {
+    if (!navigator.bluetooth) return;
+    setPairing(true);
+    setError('');
     try {
-      const devs: ScannedDevice[] = await scanDevices();
-      setDevices(devs);
-    } catch {
-      setError('Scanning failed — is the BLE scanner running?');
-    }
-    setScanning(false);
-  }
-
-  async function handleClaim(device: ScannedDevice) {
-    try {
-      const p = await claimDevice(userId, device.address, device.name);
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: ['heart_rate'] }],
+      });
+      const deviceName = device.name || 'HR Sensor';
+      const deviceAddress = `web:${userId}`;
+      const p = await claimDevice(userId, deviceAddress, deviceName);
       setProfile(p);
       setStep('done');
-    } catch {
-      setError('Failed to claim device.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Pairing failed';
+      if (!msg.includes('cancel')) {
+        setError(msg);
+      }
     }
+    setPairing(false);
+  }
+
+  function handleSkipPairing() {
+    setStep('done');
   }
 
   return (
@@ -173,123 +165,71 @@ export function Register() {
               type="submit"
               className="w-full py-3 rounded-xl font-semibold text-white bg-accent hover:bg-accent/80 transition-colors"
             >
-              {userId ? 'Update profile' : 'Register'}
+              {userId ? 'Update & pair' : 'Next — pair your watch'}
             </button>
           </form>
         )}
 
-        {/* Step 2: Pick your device */}
-        {step === 'scan' && (
+        {/* Step 2: Pair your watch */}
+        {step === 'pair' && (
           <div className="space-y-4">
             <div className="bg-surface rounded-2xl border border-border p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2
-                  className="text-lg font-semibold"
-                  style={{ fontFamily: 'var(--font-display)' }}
-                >
-                  Select your device
-                </h2>
-                <button
-                  onClick={doScan}
-                  disabled={scanning}
-                  className="text-xs text-accent hover:underline disabled:opacity-50"
-                >
-                  {scanning ? 'Scanning…' : 'Refresh'}
-                </button>
-              </div>
-
-              <p className="text-text-dim text-sm mb-3">
-                Make sure HR broadcast is enabled on your watch. Tap your device below.
+              <h2
+                className="text-lg font-semibold mb-2"
+                style={{ fontFamily: 'var(--font-display)' }}
+              >
+                Pair your watch
+              </h2>
+              <p className="text-text-dim text-sm mb-5">
+                Enable HR broadcast on your watch, then click below to find it.
               </p>
 
-              <label className="flex items-center gap-2 text-sm text-text-dim cursor-pointer mb-4">
-                <input
-                  type="checkbox"
-                  checked={showOnlyHR}
-                  onChange={(e) => setShowOnlyHR(e.target.checked)}
-                  className="accent-accent"
-                />
-                Only show HR-capable devices
-              </label>
-
-              {devices.length === 0 && !scanning && (
-                <div className="text-center py-8 text-text-dim text-sm">
-                  <div className="text-3xl mb-2 opacity-30">📡</div>
-                  No BLE devices found. Enable HR broadcast and tap Refresh.
+              {bleSupported ? (
+                <button
+                  onClick={handlePairWatch}
+                  disabled={pairing}
+                  className="w-full py-3 rounded-xl font-semibold text-white bg-blue-500 hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {pairing ? (
+                    <>
+                      <div className="animate-spin h-4 w-4 border-2 border-white/40 border-t-white rounded-full" />
+                      Pairing…
+                    </>
+                  ) : (
+                    '⦿ Find watch via Bluetooth'
+                  )}
+                </button>
+              ) : (
+                <div className="text-center py-4 text-text-dim text-sm">
+                  <p className="mb-2">Web Bluetooth not available in this browser.</p>
+                  <p>Use <strong>Chrome</strong> on a laptop or Android.</p>
                 </div>
               )}
 
-              {scanning && (
-                <div className="text-center py-6 text-text-dim text-sm">
-                  <div className="animate-spin inline-block h-5 w-5 border-2 border-accent/40 border-t-accent rounded-full mb-2" />
-                  <div>Scanning nearby devices…</div>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                {(showOnlyHR ? devices.filter(d => d.has_hr_service) : devices).map((d) => (
-                  <button
-                    key={d.address}
-                    onClick={() => handleClaim(d)}
-                    disabled={d.claimed_by !== null && d.claimed_by !== userId}
-                    className={`
-                      w-full text-left p-3 rounded-xl border transition-all
-                      ${
-                        d.claimed_by && d.claimed_by !== userId
-                          ? 'border-border/50 opacity-40 cursor-not-allowed'
-                          : 'border-border hover:border-accent/50 hover:bg-accent/5 cursor-pointer'
-                      }
-                    `}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <div className="font-medium text-sm">{d.name || 'Unknown device'}</div>
-                          {d.has_hr_service && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-red-500/15 text-red-400">
-                              HR
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-text-dim font-mono" style={{ fontFamily: 'var(--font-mono)' }}>
-                          {d.address}
-                        </div>
-                      </div>
-                      <div className="text-right flex items-center gap-3">
-                        {d.heart_rate_preview !== null && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-red-400 animate-pulse">♥</span>
-                            <span className="font-mono text-lg font-bold tabular-nums text-red-400" style={{ fontFamily: 'var(--font-mono)' }}>
-                              {d.heart_rate_preview}
-                            </span>
-                            <span className="text-[10px] text-text-dim font-mono">bpm</span>
-                          </div>
-                        )}
-                        {d.heart_rate_preview === null && d.has_hr_service && (
-                          <span className="text-xs text-text-dim">Connecting…</span>
-                        )}
-                        {d.rssi < 0 && (
-                          <div className="text-xs text-text-dim">{d.rssi} dBm</div>
-                        )}
-                        {d.claimed_by && d.claimed_by !== userId && (
-                          <div className="text-xs text-red-400">In use</div>
-                        )}
-                        {d.claimed_by === userId && (
-                          <div className="text-xs text-green-400">Your device</div>
-                        )}
-                      </div>
-                    </div>
-                  </button>
-                ))}
+              <div className="mt-4 pt-4 border-t border-border">
+                <p className="text-text-dim text-xs mb-2">Using a Garmin watch?</p>
+                <p className="text-text-dim text-[11px]">
+                  Garmin doesn't support standard BLE HR streaming in browsers.
+                  Run <code className="text-accent">scanner.py</code> on your laptop
+                  instead — it will auto-connect your watch.
+                </p>
               </div>
             </div>
 
-            <button
-              onClick={() => setStep('form')}
-              className="w-full py-2 text-sm text-text-dim hover:text-text transition-colors"
-            >
-              ← Back
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep('form')}
+                className="flex-1 py-2 text-sm text-text-dim hover:text-text transition-colors"
+              >
+                ← Back
+              </button>
+              <button
+                onClick={handleSkipPairing}
+                className="flex-1 py-2 text-sm text-text-dim hover:text-accent transition-colors"
+              >
+                Skip — I'll use scanner.py →
+              </button>
+            </div>
           </div>
         )}
 
@@ -305,7 +245,9 @@ export function Register() {
                 You're all set, {profile.name}!
               </h2>
               <p className="text-text-dim text-sm mb-4">
-                Head to the dashboard and connect your watch via Bluetooth.
+                {profile.device_name
+                  ? 'Your data will appear on the dashboard. Hit Connect Watch to start streaming.'
+                  : 'Head to the dashboard and connect your watch, or run scanner.py.'}
               </p>
 
               {profile.device_name && (
