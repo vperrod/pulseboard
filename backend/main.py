@@ -345,6 +345,43 @@ async def push_discovered_devices(devices: list[DeviceDiscovery]):
     return {"status": "ok", "count": len(devices)}
 
 
+# ── Web Bluetooth push (browser → server, no scanner key) ───────────
+
+
+class WebPush(BaseModel):
+    user_id: str
+    heart_rate: int
+    power: int | None = None
+    device_name: str = ""
+
+
+_web_bt_mapped: set[str] = set()
+
+
+@app.post("/api/metrics/web-push")
+async def web_push_metric(data: WebPush):
+    """Accept HR from Web Bluetooth (browser push, no scanner key needed)."""
+    user_id = data.user_id
+    device_address = f"web:{user_id}"
+
+    if user_id not in _web_bt_mapped:
+        user = await db.get_user(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        mapping = await db.get_device_mapping_by_address(device_address)
+        if not mapping:
+            await db.claim_device(DeviceMapping(
+                device_address=device_address,
+                device_name=data.device_name or "Web Bluetooth",
+                user_id=user_id,
+            ))
+        _web_bt_mapped.add(user_id)
+
+    await on_metric_callback(device_address, data.heart_rate, data.power)
+    return {"status": "ok"}
+
+
 @app.post("/api/sessions", response_model=Session)
 async def create_session(name: str = ""):
     session = Session(name=name)

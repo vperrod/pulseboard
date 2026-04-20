@@ -1,19 +1,25 @@
-# ── Stage 1: Build frontend ──────────────────────────────────────────
-FROM node:22-alpine AS frontend-build
-WORKDIR /app
-COPY frontend/package*.json ./
-RUN npm ci
-COPY frontend/ .
-RUN npm run build
-
-# ── Stage 2: Combined runtime (nginx + uvicorn) ─────────────────────
-FROM python:3.12-slim
+# ── Single-stage build (Oryx has Python + Node) ─────────────────────
+FROM pulseboardacr.azurecr.io/oryx-python:3.12
 
 WORKDIR /app
+
+# Fix stale Microsoft GPG key in Oryx base image
+RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /usr/share/keyrings/microsoft-prod.gpg \
+    && sed -i 's|signed-by=/usr/share/keyrings/microsoft-prod.gpg|signed-by=/usr/share/keyrings/microsoft-prod.gpg|' /etc/apt/sources.list.d/*.list 2>/dev/null || true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    supervisor nginx \
+    supervisor nginx ca-certificates gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Build frontend
+COPY frontend/package*.json /app/frontend/
+RUN cd /app/frontend && npm ci
+COPY frontend/ /app/frontend/
+RUN cd /app/frontend && npm run build
 
 # Install Python dependencies
 COPY pyproject.toml .
@@ -21,7 +27,7 @@ COPY backend/ backend/
 RUN pip install --no-cache-dir .
 
 # Copy built frontend
-COPY --from=frontend-build /app/dist /usr/share/nginx/html
+RUN cp -r /app/frontend/dist/* /usr/share/nginx/html/
 
 # Copy configs
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf

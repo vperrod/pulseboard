@@ -46,3 +46,22 @@ export async function deleteUser(userId: string) {
   const res = await fetch(`${BASE}/api/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
   return res.json();
 }
+
+export async function webPushMetric(
+  userId: string,
+  heartRate: number,
+  deviceName: string,
+  power?: number,
+) {
+  const res = await fetch(`${BASE}/api/metrics/web-push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      heart_rate: heartRate,
+      device_name: deviceName,
+      power: power ?? null,
+    }),
+  });
+  return res.json();
+}

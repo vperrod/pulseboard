@@ -63,8 +63,7 @@ export function Register() {
       setUserId(p.id);
       setProfile(p);
       localStorage.setItem('pulseboard_user_id', p.id);
-      setStep('scan');
-      doScan();
+      setStep('done');
     } catch {
       setError('Registration failed. Please try again.');
     }
@@ -174,7 +173,7 @@ export function Register() {
               type="submit"
               className="w-full py-3 rounded-xl font-semibold text-white bg-accent hover:bg-accent/80 transition-colors"
             >
-              {userId ? 'Update & scan' : 'Next — find your device'}
+              {userId ? 'Update profile' : 'Register'}
             </button>
           </form>
         )}
@@ -306,7 +305,7 @@ export function Register() {
                 You're all set, {profile.name}!
               </h2>
               <p className="text-text-dim text-sm mb-4">
-                Your data will appear on the dashboard automatically.
+                Head to the dashboard and connect your watch via Bluetooth.
               </p>
 
               {profile.device_name && (
