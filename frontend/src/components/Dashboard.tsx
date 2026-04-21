@@ -1,11 +1,27 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useWebBluetooth } from '../hooks/useWebBluetooth';
-import { webPushMetric } from '../api';
+import { webPushMetric, setViewMode as apiSetViewMode } from '../api';
 import { UserCard } from './UserCard';
+import { Leaderboard } from './Leaderboard';
+import type { ViewMode } from '../types';
+
+const VIEW_ICONS: Record<ViewMode, string> = {
+  metrics: '▦',
+  split: '◧',
+  leaderboard: '🏆',
+};
+
+const VIEW_LABELS: Record<ViewMode, string> = {
+  metrics: 'Metrics',
+  split: 'Split',
+  leaderboard: 'Board',
+};
+
+const VIEW_CYCLE: ViewMode[] = ['metrics', 'split', 'leaderboard'];
 
 export function Dashboard() {
-  const metrics = useWebSocket();
+  const { metrics, leaderboard, activeSession, viewMode } = useWebSocket();
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -23,10 +39,18 @@ export function Dashboard() {
 
   const ble = useWebBluetooth(handleHR);
 
+  function cycleViewMode() {
+    const idx = VIEW_CYCLE.indexOf(viewMode);
+    const next = VIEW_CYCLE[(idx + 1) % VIEW_CYCLE.length];
+    apiSetViewMode(next).catch(() => {});
+  }
+
+  const myMetric = userId ? metrics.find((m) => m.user_id === userId) : null;
+
   return (
     <div className="min-h-screen p-4 md:p-6 lg:p-8">
       {/* Header */}
-      <header className="mb-8 flex items-center justify-between flex-wrap gap-3">
+      <header className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1
             className="text-2xl md:text-3xl font-bold tracking-tight"
@@ -35,13 +59,20 @@ export function Dashboard() {
             <span className="text-accent">Pulse</span>Board
           </h1>
           <p className="text-text-dim text-sm mt-1">
-            {metrics.length > 0
-              ? `${metrics.filter((m) => m.connected).length} active · ${metrics.length} total`
-              : 'Waiting for devices…'}
+            {activeSession ? (
+              <>
+                <span className="text-accent font-medium">{activeSession.session_name}</span>
+                {activeSession.paused && <span className="text-amber-400 ml-1">(paused)</span>}
+              </>
+            ) : metrics.length > 0 ? (
+              `${metrics.filter((m) => m.connected).length} active · ${metrics.length} total`
+            ) : (
+              'Waiting for devices…'
+            )}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Web Bluetooth — only show for registered users */}
+        <div className="flex items-center gap-2">
+          {/* Web Bluetooth */}
           {userId && ble.supported && (
             <>
               {ble.connected ? (
@@ -67,22 +98,32 @@ export function Dashboard() {
                 <button
                   onClick={ble.connect}
                   disabled={ble.connecting}
-                  className="px-4 py-2 rounded-xl text-sm font-semibold border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-colors disabled:opacity-50"
+                  className="px-3 py-2 rounded-xl text-sm font-semibold border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-colors disabled:opacity-50"
                 >
-                  {ble.connecting ? 'Connecting…' : '⦿ Connect Watch'}
+                  {ble.connecting ? '…' : '⦿ Connect'}
                 </button>
               )}
             </>
           )}
+
+          {/* View mode toggle */}
+          <button
+            onClick={cycleViewMode}
+            className="px-3 py-2 rounded-xl text-sm font-semibold border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
+            title={`View: ${VIEW_LABELS[viewMode]}`}
+          >
+            {VIEW_ICONS[viewMode]} {VIEW_LABELS[viewMode]}
+          </button>
+
           <a
             href="/admin"
-            className="px-4 py-2 rounded-xl text-sm font-semibold border border-border text-text-dim hover:text-text hover:border-accent/30 transition-colors"
+            className="px-3 py-2 rounded-xl text-sm font-semibold border border-border text-text-dim hover:text-text hover:border-accent/30 transition-colors"
           >
             Admin
           </a>
           <a
             href="/register"
-            className="px-4 py-2 rounded-xl text-sm font-semibold border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
+            className="px-3 py-2 rounded-xl text-sm font-semibold border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
           >
             + Join
           </a>
@@ -96,33 +137,80 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Cards grid — responsive: 1 col phone, 2 tablet, 3–4 desktop, 5–6 TV */}
-      {metrics.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-          {metrics
-            .sort((a, b) => a.user_name.localeCompare(b.user_name))
-            .map((m, i) => (
-              <UserCard key={m.user_id} metric={m} index={i} />
-            ))}
+      {/* Main content — varies by view mode */}
+      {viewMode === 'split' ? (
+        /* ─── Split View ─── */
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" style={{ minHeight: '70vh' }}>
+          {/* Left: metrics grid */}
+          <div>
+            {metrics.length > 0 ? (
+              <>
+                {/* If user has a card, show it prominently first */}
+                {myMetric && (
+                  <div className="mb-4">
+                    <UserCard metric={myMetric} index={0} />
+                  </div>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {metrics
+                    .filter((m) => m.user_id !== userId)
+                    .sort((a, b) => a.user_name.localeCompare(b.user_name))
+                    .map((m, i) => (
+                      <UserCard key={m.user_id} metric={m} index={i + 1} />
+                    ))}
+                </div>
+              </>
+            ) : (
+              <EmptyMetrics />
+            )}
+          </div>
+          {/* Right: leaderboard */}
+          <div className="bg-surface/50 rounded-2xl border border-border p-4 lg:p-5">
+            <Leaderboard entries={leaderboard} session={activeSession} />
+          </div>
+        </div>
+      ) : viewMode === 'leaderboard' ? (
+        /* ─── Leaderboard Only ─── */
+        <div className="max-w-2xl mx-auto">
+          <div className="bg-surface/50 rounded-2xl border border-border p-5">
+            <Leaderboard entries={leaderboard} session={activeSession} />
+          </div>
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center min-h-[50vh] text-center">
-          <div className="text-6xl mb-4 opacity-20">📡</div>
-          <h2
-            className="text-xl font-semibold mb-2"
-            style={{ fontFamily: 'var(--font-display)' }}
-          >
-            No active users
-          </h2>
-          <p className="text-text-dim text-sm max-w-sm">
-            Turn on HR broadcast on your watch and{' '}
-            <a href="/register" className="text-accent underline underline-offset-2">
-              register
-            </a>{' '}
-            to appear here.
-          </p>
-        </div>
+        /* ─── Metrics Only (original grid) ─── */
+        metrics.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+            {metrics
+              .sort((a, b) => a.user_name.localeCompare(b.user_name))
+              .map((m, i) => (
+                <UserCard key={m.user_id} metric={m} index={i} />
+              ))}
+          </div>
+        ) : (
+          <EmptyMetrics />
+        )
       )}
+    </div>
+  );
+}
+
+function EmptyMetrics() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[50vh] text-center">
+      <div className="text-6xl mb-4 opacity-20">📡</div>
+      <h2
+        className="text-xl font-semibold mb-2"
+        style={{ fontFamily: 'var(--font-display)' }}
+      >
+        No active users
+      </h2>
+      <p className="text-text-dim text-sm max-w-sm">
+        Turn on HR broadcast on your watch and{' '}
+        <a href="/register" className="text-accent underline underline-offset-2">
+          register
+        </a>{' '}
+        to appear here.
+      </p>
     </div>
   );
 }

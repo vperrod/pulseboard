@@ -29,6 +29,29 @@ class Session(BaseModel):
     name: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     active: bool = True
+    ended_at: datetime | None = None
+    scheduled: bool = False
+    paused: bool = False
+
+
+class SessionScheduleSlot(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
+    day_of_week: int  # 0=Monday .. 6=Sunday
+    start_time: str  # "HH:MM"
+    end_time: str  # "HH:MM"
+    active: bool = True
+
+
+class SessionScore(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    session_id: str
+    user_id: str
+    user_name: str = ""
+    total_score: float = 0.0
+    zone_seconds: dict[str, int] = Field(default_factory=lambda: {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0})
+    avg_power: float | None = None
+    peak_hr: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ── Runtime / API models ────────────────────────────────────────────
@@ -46,6 +69,19 @@ class LiveMetric(BaseModel):
     zone_color: str = ""
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     connected: bool = True
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int = 0
+    user_id: str
+    user_name: str = ""
+    score: float = 0.0
+    heart_rate: int = 0
+    zone: int = 0
+    zone_label: str = ""
+    zone_color: str = ""
+    zone_seconds: dict[str, int] = Field(default_factory=lambda: {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0})
+    power: int | None = None
 
 
 class RegisterRequest(BaseModel):

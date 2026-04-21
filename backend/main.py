@@ -10,7 +10,7 @@ import os
 import random
 import time as _time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,13 +22,17 @@ from backend.hr_zones import calculate_zone
 from backend.models import (
     ClaimDeviceRequest,
     DeviceMapping,
+    LeaderboardEntry,
     LiveMetric,
     RegisterRequest,
     ScannedDevice,
     Session,
+    SessionScheduleSlot,
+    SessionScore,
     User,
     UserProfile,
 )
+from backend.scoring import SessionScorer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logging.getLogger("pulseboard.ble").setLevel(logging.DEBUG)
@@ -77,6 +81,12 @@ SIGNAL_LOST_SECONDS = 10
 BLE_ENABLED = os.getenv("BLE_ENABLED", "false").lower() in ("true", "1", "yes")
 SCANNER_KEY = os.getenv("PULSEBOARD_SCANNER_KEY", "")
 
+# ── Session scoring state ────────────────────────────────────────────
+
+active_scorer: SessionScorer | None = None
+active_session: Session | None = None
+current_view_mode: str = "split"  # "split" | "metrics" | "leaderboard"
+
 
 # ── API key auth ─────────────────────────────────────────────────────
 
@@ -103,12 +113,16 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("BLE scanner disabled (set BLE_ENABLED=true to enable)")
     watchdog_task = asyncio.create_task(signal_lost_watchdog())
+    score_task = asyncio.create_task(score_broadcast_loop())
+    scheduler_task = asyncio.create_task(session_scheduler())
     yield
     if scanner_task:
         from backend.ble_scanner import scanner
         scanner.stop()
         scanner_task.cancel()
     watchdog_task.cancel()
+    score_task.cancel()
+    scheduler_task.cancel()
 
 
 ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
@@ -149,7 +163,11 @@ async def on_metric_callback(device_address: str, heart_rate: int, power: int | 
         connected=True,
     )
     live_metrics[device_address] = metric
-    await manager.broadcast(metric.model_dump(mode="json"))
+    await manager.broadcast({"type": "metric", **metric.model_dump(mode="json")})
+
+    # Feed scoring engine
+    if active_scorer and not active_scorer.paused:
+        active_scorer.tick(user.id, user.name, zone, zone_label, zone_color, heart_rate, power)
 
 
 async def signal_lost_watchdog() -> None:
@@ -164,7 +182,86 @@ async def signal_lost_watchdog() -> None:
                 metric = live_metrics[addr]
                 if metric.connected:
                     metric.connected = False
-                    await manager.broadcast(metric.model_dump(mode="json"))
+                    await manager.broadcast({"type": "metric", **metric.model_dump(mode="json")})
+
+
+async def score_broadcast_loop() -> None:
+    """Broadcast leaderboard every second while a session is active."""
+    while True:
+        await asyncio.sleep(1)
+        if active_scorer and active_session and active_session.active and not active_scorer.paused:
+            elapsed = int((datetime.now(UTC) - active_session.created_at).total_seconds())
+            entries = active_scorer.get_leaderboard()
+            await manager.broadcast({
+                "type": "leaderboard",
+                "entries": [e.model_dump(mode="json") for e in entries],
+                "session_id": active_session.id,
+                "session_name": active_session.name,
+                "elapsed_seconds": elapsed,
+                "paused": False,
+            })
+
+
+async def session_scheduler() -> None:
+    """Auto-start/stop sessions based on the schedule."""
+    global active_session, active_scorer
+
+    while True:
+        await asyncio.sleep(15)
+        try:
+            now = datetime.now()
+            current_day = now.weekday()  # 0=Mon
+            current_time = now.strftime("%H:%M")
+
+            schedule = await db.get_schedule()
+            matching_slot = None
+            for slot in schedule:
+                if slot.active and slot.day_of_week == current_day and slot.start_time <= current_time < slot.end_time:
+                    matching_slot = slot
+                    break
+
+            if matching_slot and not active_session:
+                # Auto-start session
+                session = Session(name=f"{matching_slot.start_time}–{matching_slot.end_time}", scheduled=True)
+                await db.create_session(session)
+                active_session = session
+                active_scorer = SessionScorer(session.id)
+                logger.info("Auto-started session %s (%s)", session.id, session.name)
+                await manager.broadcast({
+                    "type": "session_start",
+                    "session_id": session.id,
+                    "session_name": session.name,
+                })
+
+            elif active_session and active_session.scheduled and not matching_slot:
+                # Auto-end scheduled session
+                await _end_active_session()
+                logger.info("Auto-ended scheduled session")
+
+        except Exception:
+            logger.exception("Session scheduler error")
+
+
+async def _end_active_session() -> None:
+    """End the active session: finalize scores, persist, broadcast, cleanup."""
+    global active_session, active_scorer
+
+    if not active_session:
+        return
+
+    ended_at = datetime.now(UTC).isoformat()
+    await db.end_session(active_session.id, ended_at)
+
+    if active_scorer:
+        scores = active_scorer.finalize()
+        if scores:
+            await db.save_session_scores(scores)
+        active_scorer = None
+
+    session_id = active_session.id
+    active_session = None
+
+    await manager.broadcast({"type": "session_end", "session_id": session_id})
 
 
 # ── REST endpoints ───────────────────────────────────────────────────
@@ -383,10 +480,255 @@ async def web_push_metric(data: WebPush):
 
 
 @app.post("/api/sessions", response_model=Session)
-async def create_session(name: str = ""):
+async def create_session_endpoint(name: str = ""):
     session = Session(name=name)
     await db.create_session(session)
     return session
+
+
+# ── Session control endpoints ────────────────────────────────────────
+
+
+class SessionStartRequest(BaseModel):
+    name: str = ""
+
+
+@app.post("/api/sessions/start")
+async def start_session(req: SessionStartRequest | None = None):
+    global active_session, active_scorer
+    if active_session:
+        raise HTTPException(status_code=409, detail="A session is already active")
+    name = req.name if req else ""
+    session = Session(name=name or datetime.now().strftime("%H:%M session"), scheduled=False)
+    await db.create_session(session)
+    active_session = session
+    active_scorer = SessionScorer(session.id)
+    await manager.broadcast({
+        "type": "session_start",
+        "session_id": session.id,
+        "session_name": session.name,
+    })
+    return {"status": "started", "session_id": session.id, "session_name": session.name}
+
+
+@app.post("/api/sessions/stop")
+async def stop_session():
+    if not active_session:
+        raise HTTPException(status_code=404, detail="No active session")
+    session_id = active_session.id
+    await _end_active_session()
+    return {"status": "stopped", "session_id": session_id}
+
+
+@app.post("/api/sessions/pause")
+async def pause_session():
+    if not active_session or not active_scorer:
+        raise HTTPException(status_code=404, detail="No active session")
+    active_scorer.paused = True
+    active_session.paused = True
+    await db.set_session_paused(active_session.id, True)
+    await manager.broadcast({
+        "type": "session_pause",
+        "session_id": active_session.id,
+        "paused": True,
+    })
+    return {"status": "paused"}
+
+
+@app.post("/api/sessions/resume")
+async def resume_session():
+    if not active_session or not active_scorer:
+        raise HTTPException(status_code=404, detail="No active session")
+    active_scorer.paused = False
+    active_session.paused = False
+    await db.set_session_paused(active_session.id, False)
+    await manager.broadcast({
+        "type": "session_pause",
+        "session_id": active_session.id,
+        "paused": False,
+    })
+    return {"status": "resumed"}
+
+
+@app.get("/api/sessions/active")
+async def get_active_session():
+    if not active_session:
+        return {"active": False}
+    elapsed = int((datetime.now(UTC) - active_session.created_at).total_seconds())
+    entries = active_scorer.get_leaderboard() if active_scorer else []
+    return {
+        "active": True,
+        "session_id": active_session.id,
+        "session_name": active_session.name,
+        "elapsed_seconds": elapsed,
+        "paused": active_session.paused,
+        "leaderboard": [e.model_dump(mode="json") for e in entries],
+    }
+
+
+@app.get("/api/sessions")
+async def list_sessions(date: str | None = None, start: str | None = None, end: str | None = None):
+    if date:
+        sessions = await db.get_sessions_by_date(date)
+    elif start and end:
+        sessions = await db.get_sessions_by_range(start, end)
+    else:
+        sessions = await db.get_sessions_by_date(datetime.now().strftime("%Y-%m-%d"))
+    return [s.model_dump(mode="json") for s in sessions]
+
+
+# ── View mode (broadcast to all clients) ─────────────────────────────
+
+
+class ViewModeRequest(BaseModel):
+    mode: str  # "split" | "metrics" | "leaderboard"
+
+
+@app.post("/api/view-mode")
+async def set_view_mode(req: ViewModeRequest):
+    global current_view_mode
+    if req.mode not in ("split", "metrics", "leaderboard"):
+        raise HTTPException(status_code=400, detail="Invalid mode")
+    current_view_mode = req.mode
+    await manager.broadcast({"type": "view_mode", "mode": current_view_mode})
+    return {"status": "ok", "mode": current_view_mode}
+
+
+# ── Schedule management ──────────────────────────────────────────────
+
+
+@app.get("/api/schedule")
+async def get_schedule():
+    slots = await db.get_schedule()
+    return [s.model_dump(mode="json") for s in slots]
+
+
+@app.put("/api/schedule")
+async def replace_schedule(slots: list[SessionScheduleSlot]):
+    result = await db.replace_schedule(slots)
+    return [s.model_dump(mode="json") for s in result]
+
+
+@app.post("/api/schedule")
+async def add_schedule_slot(slot: SessionScheduleSlot):
+    result = await db.add_schedule_slot(slot)
+    return result.model_dump(mode="json")
+
+
+@app.delete("/api/schedule/{slot_id}")
+async def delete_schedule_slot(slot_id: str):
+    deleted = await db.delete_schedule_slot(slot_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Slot not found")
+    return {"status": "deleted"}
+
+
+# ── Historical leaderboards ──────────────────────────────────────────
+
+
+@app.get("/api/leaderboards/daily")
+async def daily_leaderboard(date: str | None = None):
+    """Get leaderboard for a specific day. Aggregates all sessions."""
+    target = date or datetime.now().strftime("%Y-%m-%d")
+    sessions = await db.get_sessions_by_date(target)
+    all_scores: dict[str, dict] = {}
+    session_details = []
+
+    for s in sessions:
+        scores = await db.get_session_scores(s.id)
+        session_details.append({
+            "session_id": s.id,
+            "session_name": s.name,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "scores": [sc.model_dump(mode="json") for sc in scores],
+        })
+        for sc in scores:
+            if sc.user_id not in all_scores:
+                all_scores[sc.user_id] = {
+                    "user_id": sc.user_id, "user_name": sc.user_name,
+                    "total_score": 0.0, "sessions_count": 0,
+                    "zone_seconds": {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0},
+                    "peak_hr": 0, "power_sum": 0.0, "power_count": 0,
+                }
+            agg = all_scores[sc.user_id]
+            agg["total_score"] += sc.total_score
+            agg["sessions_count"] += 1
+            agg["peak_hr"] = max(agg["peak_hr"], sc.peak_hr)
+            for z in ("1", "2", "3", "4", "5"):
+                agg["zone_seconds"][z] += sc.zone_seconds.get(z, 0)
+            if sc.avg_power is not None:
+                agg["power_sum"] += sc.avg_power
+                agg["power_count"] += 1
+
+    combined = sorted(all_scores.values(), key=lambda x: x["total_score"], reverse=True)
+    for i, entry in enumerate(combined):
+        entry["rank"] = i + 1
+        entry["avg_power"] = round(entry.pop("power_sum") / entry.pop("power_count"), 1) if entry["power_count"] > 0 else None
+        if "power_count" in entry:
+            del entry["power_count"]
+
+    return {"date": target, "combined": combined, "sessions": session_details}
+
+
+@app.get("/api/leaderboards/weekly")
+async def weekly_leaderboard(date: str | None = None):
+    """Get aggregated leaderboard for the week containing the given date."""
+    from datetime import timedelta
+    target = datetime.strptime(date, "%Y-%m-%d") if date else datetime.now()
+    monday = target - timedelta(days=target.weekday())
+    sunday = monday + timedelta(days=7)
+    start_str = monday.strftime("%Y-%m-%d")
+    end_str = sunday.strftime("%Y-%m-%d")
+
+    scores = await db.get_scores_by_date_range(start_str, end_str)
+    return _aggregate_scores(scores, start_str, end_str, "weekly")
+
+
+@app.get("/api/leaderboards/monthly")
+async def monthly_leaderboard(year: int | None = None, month: int | None = None):
+    """Get aggregated leaderboard for the given month."""
+    from datetime import timedelta
+    now = datetime.now()
+    y = year or now.year
+    m = month or now.month
+    start_str = f"{y:04d}-{m:02d}-01"
+    if m == 12:
+        end_str = f"{y + 1:04d}-01-01"
+    else:
+        end_str = f"{y:04d}-{m + 1:02d}-01"
+
+    scores = await db.get_scores_by_date_range(start_str, end_str)
+    return _aggregate_scores(scores, start_str, end_str, "monthly")
+
+
+def _aggregate_scores(scores: list[SessionScore], start: str, end: str, period: str) -> dict:
+    agg: dict[str, dict] = {}
+    for sc in scores:
+        if sc.user_id not in agg:
+            agg[sc.user_id] = {
+                "user_id": sc.user_id, "user_name": sc.user_name,
+                "total_score": 0.0, "sessions_count": 0,
+                "zone_seconds": {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0},
+                "peak_hr": 0, "power_sum": 0.0, "power_count": 0,
+            }
+        a = agg[sc.user_id]
+        a["total_score"] += sc.total_score
+        a["sessions_count"] += 1
+        a["peak_hr"] = max(a["peak_hr"], sc.peak_hr)
+        for z in ("1", "2", "3", "4", "5"):
+            a["zone_seconds"][z] += sc.zone_seconds.get(z, 0)
+        if sc.avg_power is not None:
+            a["power_sum"] += sc.avg_power
+            a["power_count"] += 1
+
+    combined = sorted(agg.values(), key=lambda x: x["total_score"], reverse=True)
+    for i, entry in enumerate(combined):
+        entry["rank"] = i + 1
+        entry["avg_power"] = round(entry.pop("power_sum") / entry.pop("power_count"), 1) if entry["power_count"] > 0 else None
+        if "power_count" in entry:
+            del entry["power_count"]
+
+    return {"period": period, "start": start, "end": end, "combined": combined}
 
 
 # ── WebSocket ────────────────────────────────────────────────────────
@@ -396,12 +738,34 @@ async def create_session(name: str = ""):
 async def websocket_live(ws: WebSocket):
     await manager.connect(ws)
     try:
-        # Send current state snapshot on connect
+        # Send current view mode
+        await ws.send_json({"type": "view_mode", "mode": current_view_mode})
+        # Send active session info if any
+        if active_session:
+            elapsed = int((datetime.now(UTC) - active_session.created_at).total_seconds())
+            await ws.send_json({
+                "type": "session_start",
+                "session_id": active_session.id,
+                "session_name": active_session.name,
+                "elapsed_seconds": elapsed,
+                "paused": active_session.paused,
+            })
+            # Send current leaderboard
+            if active_scorer:
+                entries = active_scorer.get_leaderboard()
+                await ws.send_json({
+                    "type": "leaderboard",
+                    "entries": [e.model_dump(mode="json") for e in entries],
+                    "session_id": active_session.id,
+                    "session_name": active_session.name,
+                    "elapsed_seconds": elapsed,
+                    "paused": active_scorer.paused,
+                })
+        # Send current metric state snapshot
         for metric in live_metrics.values():
-            await ws.send_json(metric.model_dump(mode="json"))
-        # Keep alive — client doesn't need to send anything
+            await ws.send_json({"type": "metric", **metric.model_dump(mode="json")})
+        # Keep alive
         while True:
-            # Accept pings/messages to keep connection alive
             await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws)
@@ -425,8 +789,8 @@ _demo_task: asyncio.Task | None = None
 
 @app.post("/api/demo/start")
 async def start_demo():
-    """Seed demo users + devices and start simulating live HR/power data."""
-    global _demo_task
+    """Seed demo users + devices, start a session, and simulate live HR/power."""
+    global _demo_task, active_session, active_scorer
 
     # Create users and device mappings
     for u in DEMO_USERS:
@@ -445,11 +809,23 @@ async def start_demo():
             "services": ["0000180d-0000-1000-8000-00805f9b34fb"],
         }
 
+    # Start a demo session with scoring
+    if not active_session:
+        session = Session(name="Demo Session", scheduled=False)
+        await db.create_session(session)
+        active_session = session
+        active_scorer = SessionScorer(session.id)
+        await manager.broadcast({
+            "type": "session_start",
+            "session_id": session.id,
+            "session_name": session.name,
+        })
+
     # Start simulation loop
     if _demo_task is None or _demo_task.done():
         _demo_task = asyncio.create_task(_demo_loop())
 
-    return {"status": "demo started", "users": len(DEMO_USERS)}
+    return {"status": "demo started", "users": len(DEMO_USERS), "session_id": active_session.id}
 
 
 @app.post("/api/demo/stop")
@@ -458,6 +834,10 @@ async def stop_demo():
     if _demo_task and not _demo_task.done():
         _demo_task.cancel()
         _demo_task = None
+
+    # End the active session (finalizes scores)
+    await _end_active_session()
+
     # Clear live state
     live_metrics.clear()
     device_hr_preview.clear()

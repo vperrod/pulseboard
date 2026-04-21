@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import aiosqlite
 
-from backend.models import DeviceMapping, Session, User
+from backend.models import DeviceMapping, Session, SessionScheduleSlot, SessionScore, User
 
 DB_PATH = "pulseboard.db"
 
@@ -13,6 +15,21 @@ async def get_db() -> aiosqlite.Connection:
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     return db
+
+
+_DEFAULT_SCHEDULE = [
+    # Mon-Fri
+    *[(d, "06:00", "07:00") for d in range(5)],
+    *[(d, "07:00", "08:00") for d in range(5)],
+    *[(d, "08:00", "09:00") for d in range(5)],
+    *[(d, "09:30", "10:30") for d in range(5)],
+    *[(d, "18:00", "19:00") for d in range(5)],
+    *[(d, "19:00", "20:00") for d in range(5)],
+    # Sat-Sun
+    *[(d, "07:00", "08:00") for d in (5, 6)],
+    *[(d, "08:00", "09:00") for d in (5, 6)],
+    *[(d, "09:00", "10:00") for d in (5, 6)],
+]
 
 
 async def init_db() -> None:
@@ -38,9 +55,58 @@ async def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                ended_at TEXT,
+                scheduled INTEGER NOT NULL DEFAULT 0,
+                paused INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS session_schedule (
+                id TEXT PRIMARY KEY,
+                day_of_week INTEGER NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS session_scores (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                user_name TEXT NOT NULL DEFAULT '',
+                total_score REAL NOT NULL DEFAULT 0,
+                zone_seconds TEXT NOT NULL DEFAULT '{}',
+                avg_power REAL,
+                peak_hr INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+
+        # Migrate existing sessions table if columns missing
+        cursor = await db.execute("PRAGMA table_info(sessions)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "ended_at" not in cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN ended_at TEXT")
+        if "scheduled" not in cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN scheduled INTEGER NOT NULL DEFAULT 0")
+        if "paused" not in cols:
+            await db.execute("ALTER TABLE sessions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
+
+        # Seed default schedule if empty
+        cursor = await db.execute("SELECT COUNT(*) FROM session_schedule")
+        count = (await cursor.fetchone())[0]
+        if count == 0:
+            for day, start, end in _DEFAULT_SCHEDULE:
+                slot = SessionScheduleSlot(day_of_week=day, start_time=start, end_time=end)
+                await db.execute(
+                    "INSERT INTO session_schedule (id, day_of_week, start_time, end_time, active) VALUES (?, ?, ?, ?, ?)",
+                    (slot.id, slot.day_of_week, slot.start_time, slot.end_time, 1),
+                )
+
         await db.commit()
 
 
@@ -151,8 +217,10 @@ async def get_all_device_mappings() -> list[DeviceMapping]:
 async def create_session(session: Session) -> Session:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO sessions (id, name, created_at, active) VALUES (?, ?, ?, ?)",
-            (session.id, session.name, session.created_at.isoformat(), int(session.active)),
+            "INSERT INTO sessions (id, name, created_at, active, ended_at, scheduled, paused) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session.id, session.name, session.created_at.isoformat(), int(session.active),
+             session.ended_at.isoformat() if session.ended_at else None,
+             int(session.scheduled), int(session.paused)),
         )
         await db.commit()
     return session
@@ -165,10 +233,160 @@ async def get_active_session() -> Session | None:
         row = await cursor.fetchone()
         if not row:
             return None
-        return Session(id=row["id"], name=row["name"], active=bool(row["active"]))
+        return _row_to_session(row)
 
 
-async def end_session(session_id: str) -> None:
+async def end_session(session_id: str, ended_at: str | None = None) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE sessions SET active = 0 WHERE id = ?", (session_id,))
+        await db.execute(
+            "UPDATE sessions SET active = 0, ended_at = ? WHERE id = ?",
+            (ended_at, session_id),
+        )
         await db.commit()
+
+
+async def set_session_paused(session_id: str, paused: bool) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE sessions SET paused = ? WHERE id = ?", (int(paused), session_id))
+        await db.commit()
+
+
+async def get_sessions_by_date(date_str: str) -> list[Session]:
+    """Get all sessions whose created_at starts with date_str (YYYY-MM-DD)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM sessions WHERE created_at LIKE ? ORDER BY created_at",
+            (f"{date_str}%",),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_session(r) for r in rows]
+
+
+async def get_sessions_by_range(start_date: str, end_date: str) -> list[Session]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM sessions WHERE created_at >= ? AND created_at < ? ORDER BY created_at",
+            (start_date, end_date),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_session(r) for r in rows]
+
+
+def _row_to_session(row) -> Session:
+    from datetime import datetime, UTC
+    ended_at = None
+    if row["ended_at"]:
+        try:
+            ended_at = datetime.fromisoformat(row["ended_at"])
+        except (ValueError, TypeError):
+            pass
+    return Session(
+        id=row["id"],
+        name=row["name"],
+        active=bool(row["active"]),
+        ended_at=ended_at,
+        scheduled=bool(row["scheduled"]) if "scheduled" in row.keys() else False,
+        paused=bool(row["paused"]) if "paused" in row.keys() else False,
+    )
+
+
+# ── Schedule ─────────────────────────────────────────────────────────
+
+
+async def get_schedule() -> list[SessionScheduleSlot]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM session_schedule ORDER BY day_of_week, start_time")
+        rows = await cursor.fetchall()
+        return [
+            SessionScheduleSlot(
+                id=r["id"], day_of_week=r["day_of_week"],
+                start_time=r["start_time"], end_time=r["end_time"],
+                active=bool(r["active"]),
+            )
+            for r in rows
+        ]
+
+
+async def replace_schedule(slots: list[SessionScheduleSlot]) -> list[SessionScheduleSlot]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM session_schedule")
+        for s in slots:
+            await db.execute(
+                "INSERT INTO session_schedule (id, day_of_week, start_time, end_time, active) VALUES (?, ?, ?, ?, ?)",
+                (s.id, s.day_of_week, s.start_time, s.end_time, int(s.active)),
+            )
+        await db.commit()
+    return slots
+
+
+async def add_schedule_slot(slot: SessionScheduleSlot) -> SessionScheduleSlot:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO session_schedule (id, day_of_week, start_time, end_time, active) VALUES (?, ?, ?, ?, ?)",
+            (slot.id, slot.day_of_week, slot.start_time, slot.end_time, int(slot.active)),
+        )
+        await db.commit()
+    return slot
+
+
+async def delete_schedule_slot(slot_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM session_schedule WHERE id = ?", (slot_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+# ── Scores ───────────────────────────────────────────────────────────
+
+
+async def save_session_scores(scores: list[SessionScore]) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        for s in scores:
+            await db.execute(
+                "INSERT INTO session_scores (id, session_id, user_id, user_name, total_score, zone_seconds, avg_power, peak_hr, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (s.id, s.session_id, s.user_id, s.user_name, s.total_score,
+                 json.dumps(s.zone_seconds), s.avg_power, s.peak_hr,
+                 s.created_at.isoformat()),
+            )
+        await db.commit()
+
+
+async def get_session_scores(session_id: str) -> list[SessionScore]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM session_scores WHERE session_id = ? ORDER BY total_score DESC",
+            (session_id,),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_score(r) for r in rows]
+
+
+async def get_scores_by_date_range(start_date: str, end_date: str) -> list[SessionScore]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT ss.* FROM session_scores ss
+               JOIN sessions s ON ss.session_id = s.id
+               WHERE s.created_at >= ? AND s.created_at < ?
+               ORDER BY ss.total_score DESC""",
+            (start_date, end_date),
+        )
+        rows = await cursor.fetchall()
+        return [_row_to_score(r) for r in rows]
+
+
+def _row_to_score(row) -> SessionScore:
+    return SessionScore(
+        id=row["id"],
+        session_id=row["session_id"],
+        user_id=row["user_id"],
+        user_name=row["user_name"],
+        total_score=row["total_score"],
+        zone_seconds=json.loads(row["zone_seconds"]) if row["zone_seconds"] else {},
+        avg_power=row["avg_power"],
+        peak_hr=row["peak_hr"],
+    )

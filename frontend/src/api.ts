@@ -65,3 +65,107 @@ export async function webPushMetric(
   });
   return res.json();
 }
+
+// ── Session control ─────────────────────────────────────────────────
+
+export async function startSession(name?: string) {
+  const res = await fetch(`${BASE}/api/sessions/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name || '' }),
+  });
+  return res.json();
+}
+
+export async function stopSession() {
+  const res = await fetch(`${BASE}/api/sessions/stop`, { method: 'POST' });
+  return res.json();
+}
+
+export async function pauseSession() {
+  const res = await fetch(`${BASE}/api/sessions/pause`, { method: 'POST' });
+  return res.json();
+}
+
+export async function resumeSession() {
+  const res = await fetch(`${BASE}/api/sessions/resume`, { method: 'POST' });
+  return res.json();
+}
+
+export async function getActiveSession() {
+  const res = await fetch(`${BASE}/api/sessions/active`);
+  return res.json();
+}
+
+// ── View mode ───────────────────────────────────────────────────────
+
+export async function setViewMode(mode: string) {
+  const res = await fetch(`${BASE}/api/view-mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  return res.json();
+}
+
+// ── Schedule ────────────────────────────────────────────────────────
+
+export async function getSchedule() {
+  const res = await fetch(`${BASE}/api/schedule`);
+  return res.json();
+}
+
+export async function updateSchedule(slots: import('./types').SessionScheduleSlot[]) {
+  const res = await fetch(`${BASE}/api/schedule`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(slots),
+  });
+  return res.json();
+}
+
+export async function addScheduleSlot(slot: Partial<import('./types').SessionScheduleSlot>) {
+  const res = await fetch(`${BASE}/api/schedule`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(slot),
+  });
+  return res.json();
+}
+
+export async function deleteScheduleSlot(slotId: string) {
+  const res = await fetch(`${BASE}/api/schedule/${encodeURIComponent(slotId)}`, { method: 'DELETE' });
+  return res.json();
+}
+
+// ── Leaderboards ────────────────────────────────────────────────────
+
+export async function getDailyLeaderboard(date?: string) {
+  const params = date ? `?date=${date}` : '';
+  const res = await fetch(`${BASE}/api/leaderboards/daily${params}`);
+  return res.json();
+}
+
+export async function getWeeklyLeaderboard(date?: string) {
+  const params = date ? `?date=${date}` : '';
+  const res = await fetch(`${BASE}/api/leaderboards/weekly${params}`);
+  return res.json();
+}
+
+export async function getMonthlyLeaderboard(year?: number, month?: number) {
+  const params = year && month ? `?year=${year}&month=${month}` : '';
+  const res = await fetch(`${BASE}/api/leaderboards/monthly${params}`);
+  return res.json();
+}
+
+// ── Demo ────────────────────────────────────────────────────────────
+
+export async function startDemo() {
+  const res = await fetch(`${BASE}/api/demo/start`, { method: 'POST' });
+  return res.json();
+}
+
+export async function stopDemo() {
+  const res = await fetch(`${BASE}/api/demo/stop`, { method: 'POST' });
+  return res.json();
+}
