@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useWebBluetooth } from '../hooks/useWebBluetooth';
-import { webPushMetric, setViewMode as apiSetViewMode } from '../api';
+import { webPushMetric, setViewMode as apiSetViewMode, startSession, stopSession } from '../api';
 import { UserCard } from './UserCard';
 import { Leaderboard } from './Leaderboard';
 import type { ViewMode } from '../types';
@@ -114,6 +114,25 @@ export function Dashboard() {
           >
             {VIEW_ICONS[viewMode]} {VIEW_LABELS[viewMode]}
           </button>
+
+          {/* Quick session start/stop */}
+          {activeSession ? (
+            <button
+              onClick={() => stopSession().catch(() => {})}
+              className="px-3 py-2 rounded-xl text-sm font-semibold border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors"
+              title="Stop session"
+            >
+              ⏹ Stop
+            </button>
+          ) : (
+            <button
+              onClick={() => startSession().catch(() => {})}
+              className="px-3 py-2 rounded-xl text-sm font-semibold bg-accent text-white hover:bg-accent/80 transition-colors"
+              title="Start a new session"
+            >
+              ▶ Start
+            </button>
+          )}
 
           <a
             href="/admin"
