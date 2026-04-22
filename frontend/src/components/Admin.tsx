@@ -4,6 +4,7 @@ import {
   getSchedule, deleteScheduleSlot, addScheduleSlot, updateScheduleSlot,
   startSession, stopSession, pauseSession, resumeSession,
   getActiveSession, getSessionsByDate, getSessionDetail,
+  updateSessionName, deleteSession,
   getDailyLeaderboard, getWeeklyLeaderboard, getMonthlyLeaderboard,
   startDemo, stopDemo,
 } from '../api';
@@ -98,6 +99,8 @@ function SessionPanel() {
       avg_power: number | null; peak_hr: number;
     }>;
   } | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editSessionName, setEditSessionName] = useState('');
 
   const zoneColors = ['#94A3B8', '#3B82F6', '#22C55E', '#F97316', '#EF4444'];
 
@@ -155,6 +158,23 @@ function SessionPanel() {
   }
 
   useEffect(() => { loadHistory(historyDate); }, [historyDate]);
+
+  async function handleDeleteSession(sessionId: string) {
+    try {
+      await deleteSession(sessionId);
+      setExpandedSessionId(null);
+      setSessionDetail(null);
+      await loadHistory(historyDate);
+    } catch { /* ignore */ }
+  }
+
+  async function handleRenameSession(sessionId: string) {
+    try {
+      await updateSessionName(sessionId, editSessionName);
+      setEditingSessionId(null);
+      await loadHistory(historyDate);
+    } catch { /* ignore */ }
+  }
 
   async function toggleSessionDetail(sessionId: string) {
     if (expandedSessionId === sessionId) {
@@ -334,23 +354,47 @@ function SessionPanel() {
 
                 return (
                   <div key={s.id} className="rounded-xl border border-border bg-surface-alt overflow-hidden">
-                    <button
-                      onClick={() => toggleSessionDetail(s.id)}
-                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-surface transition-colors text-left"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-semibold">{s.name || s.id}</span>
-                        {s.scheduled && (
-                          <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent/10 text-accent font-semibold">
-                            Scheduled
-                          </span>
+                    <div className="w-full px-4 py-3 flex items-center justify-between hover:bg-surface transition-colors">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        {editingSessionId === s.id ? (
+                          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="text"
+                              value={editSessionName}
+                              onChange={(e) => setEditSessionName(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleRenameSession(s.id); if (e.key === 'Escape') setEditingSessionId(null); }}
+                              className="bg-surface border border-accent/50 rounded-lg px-2 py-1 text-sm text-text focus:outline-none w-48"
+                              autoFocus
+                            />
+                            <button onClick={() => handleRenameSession(s.id)} className="text-accent text-xs font-semibold hover:underline">Save</button>
+                            <button onClick={() => setEditingSessionId(null)} className="text-text-dim text-xs hover:underline">Cancel</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => toggleSessionDetail(s.id)} className="flex items-center gap-3 text-left">
+                            <span className="text-sm font-semibold">{s.name || s.id}</span>
+                            {s.scheduled && (
+                              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent/10 text-accent font-semibold">
+                                Scheduled
+                              </span>
+                            )}
+                          </button>
                         )}
                       </div>
                       <div className="flex items-center gap-3 text-text-dim text-xs">
                         <span style={{ fontFamily: 'var(--font-mono)' }}>{startTime} → {endTime}</span>
-                        <span className="text-lg leading-none">{isExpanded ? '▾' : '▸'}</span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setEditingSessionId(s.id); setEditSessionName(s.name || ''); }}
+                          className="text-text-dim hover:text-accent transition-colors"
+                          title="Rename"
+                        >✏️</button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.id); }}
+                          className="text-text-dim hover:text-red-400 transition-colors"
+                          title="Delete"
+                        >🗑️</button>
+                        <button onClick={() => toggleSessionDetail(s.id)} className="text-lg leading-none">{isExpanded ? '▾' : '▸'}</button>
                       </div>
-                    </button>
+                    </div>
 
                     {isExpanded && sessionDetail && sessionDetail.session.id === s.id && (
                       <div className="border-t border-border px-4 py-3">

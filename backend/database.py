@@ -282,6 +282,26 @@ async def get_sessions_by_date(date_str: str) -> list[Session]:
         return [_row_to_session(r) for r in rows]
 
 
+async def delete_session(session_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM session_scores WHERE session_id = ?", (session_id,))
+        cursor = await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def update_session_name(session_id: str, name: str) -> Session | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("UPDATE sessions SET name = ? WHERE id = ?", (name, session_id))
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+        cursor = await db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+        row = await cursor.fetchone()
+        return _row_to_session(row) if row else None
+
+
 async def get_sessions_by_range(start_date: str, end_date: str) -> list[Session]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

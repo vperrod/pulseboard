@@ -595,6 +595,29 @@ async def get_session_detail(session_id: str):
     }
 
 
+class SessionUpdateRequest(BaseModel):
+    name: str
+
+
+@app.put("/api/sessions/{session_id}")
+async def update_session(session_id: str, req: SessionUpdateRequest):
+    updated = await db.update_session_name(session_id, req.name)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return updated.model_dump(mode="json")
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_endpoint(session_id: str):
+    # Don't allow deleting the active session
+    if active_session and active_session.id == session_id:
+        raise HTTPException(status_code=409, detail="Cannot delete the active session")
+    deleted = await db.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "deleted", "session_id": session_id}
+
+
 # ── View mode (broadcast to all clients) ─────────────────────────────
 
 

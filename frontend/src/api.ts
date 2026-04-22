@@ -107,6 +107,22 @@ export async function getSessionDetail(sessionId: string) {
   return res.json();
 }
 
+export async function updateSessionName(sessionId: string, name: string) {
+  const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return res.json();
+}
+
+export async function deleteSession(sessionId: string) {
+  const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+  });
+  return res.json();
+}
+
 // ── View mode ───────────────────────────────────────────────────────
 
 export async function setViewMode(mode: string) {
