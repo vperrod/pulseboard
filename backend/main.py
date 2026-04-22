@@ -269,9 +269,9 @@ async def _end_active_session() -> None:
 
 @app.post("/api/register", response_model=UserProfile)
 async def register_user(req: RegisterRequest):
-    user = User(name=req.name, max_hr=req.max_hr)
+    user = User(name=req.name, email=req.email, max_hr=req.max_hr)
     await db.create_user(user)
-    return UserProfile(id=user.id, name=user.name, max_hr=user.max_hr)
+    return UserProfile(id=user.id, name=user.name, email=user.email, max_hr=user.max_hr)
 
 
 @app.get("/api/profile/{user_id}", response_model=UserProfile)
@@ -284,6 +284,7 @@ async def get_profile(user_id: str):
     return UserProfile(
         id=user.id,
         name=user.name,
+        email=user.email,
         max_hr=user.max_hr,
         device_address=device.device_address if device else None,
         device_name=device.device_name if device else None,
@@ -292,7 +293,7 @@ async def get_profile(user_id: str):
 
 @app.put("/api/profile/{user_id}", response_model=UserProfile)
 async def update_profile(user_id: str, req: RegisterRequest):
-    user = await db.update_user(user_id, name=req.name, max_hr=req.max_hr)
+    user = await db.update_user(user_id, name=req.name, email=req.email, max_hr=req.max_hr)
     if not user:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="User not found")
@@ -300,6 +301,7 @@ async def update_profile(user_id: str, req: RegisterRequest):
     return UserProfile(
         id=user.id,
         name=user.name,
+        email=user.email,
         max_hr=user.max_hr,
         device_address=device.device_address if device else None,
         device_name=device.device_name if device else None,
@@ -353,6 +355,7 @@ async def claim_device(req: ClaimDeviceRequest):
     return UserProfile(
         id=user.id,
         name=user.name,
+        email=user.email,
         max_hr=user.max_hr,
         device_address=mapping.device_address,
         device_name=mapping.device_name,
@@ -368,7 +371,7 @@ async def list_all_users():
     for u in users:
         m = mapping_by_user.get(u.id)
         result.append(UserProfile(
-            id=u.id, name=u.name, max_hr=u.max_hr,
+            id=u.id, name=u.name, email=u.email, max_hr=u.max_hr,
             device_address=m.device_address if m else None,
             device_name=m.device_name if m else None,
         ))
@@ -577,6 +580,21 @@ async def list_sessions(date: str | None = None, start: str | None = None, end: 
     return [s.model_dump(mode="json") for s in sessions]
 
 
+@app.get("/api/sessions/{session_id}")
+async def get_session_detail(session_id: str):
+    """Get a session's info and its participant scores."""
+    scores = await db.get_session_scores(session_id)
+    # Try to find the session in completed sessions
+    # We need to look across all dates, so query directly
+    session_row = await db.get_session_by_id(session_id)
+    if not session_row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session": session_row.model_dump(mode="json"),
+        "scores": [s.model_dump(mode="json") for s in scores],
+    }
+
+
 # ── View mode (broadcast to all clients) ─────────────────────────────
 
 
@@ -621,6 +639,25 @@ async def delete_schedule_slot(slot_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Slot not found")
     return {"status": "deleted"}
+
+
+class ScheduleSlotUpdate(BaseModel):
+    day_of_week: int | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+
+
+@app.put("/api/schedule/{slot_id}")
+async def update_schedule_slot(slot_id: str, req: ScheduleSlotUpdate):
+    updated = await db.update_schedule_slot(
+        slot_id,
+        day_of_week=req.day_of_week,
+        start_time=req.start_time,
+        end_time=req.end_time,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Slot not found")
+    return updated.model_dump(mode="json")
 
 
 # ── Historical leaderboards ──────────────────────────────────────────

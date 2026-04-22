@@ -1,10 +1,10 @@
 const BASE = '';
 
-export async function registerUser(name: string, maxHr: number) {
+export async function registerUser(name: string, maxHr: number, email: string = '') {
   const res = await fetch(`${BASE}/api/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, max_hr: maxHr }),
+    body: JSON.stringify({ name, max_hr: maxHr, email }),
   });
   return res.json();
 }
@@ -14,11 +14,11 @@ export async function getProfile(userId: string) {
   return res.json();
 }
 
-export async function updateProfile(userId: string, name: string, maxHr: number) {
+export async function updateProfile(userId: string, name: string, maxHr: number, email: string = '') {
   const res = await fetch(`${BASE}/api/profile/${userId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, max_hr: maxHr }),
+    body: JSON.stringify({ name, max_hr: maxHr, email }),
   });
   return res.json();
 }
@@ -97,6 +97,16 @@ export async function getActiveSession() {
   return res.json();
 }
 
+export async function getSessionsByDate(date: string) {
+  const res = await fetch(`${BASE}/api/sessions?date=${date}`);
+  return res.json();
+}
+
+export async function getSessionDetail(sessionId: string) {
+  const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}`);
+  return res.json();
+}
+
 // ── View mode ───────────────────────────────────────────────────────
 
 export async function setViewMode(mode: string) {
@@ -135,6 +145,15 @@ export async function addScheduleSlot(slot: Partial<import('./types').SessionSch
 
 export async function deleteScheduleSlot(slotId: string) {
   const res = await fetch(`${BASE}/api/schedule/${encodeURIComponent(slotId)}`, { method: 'DELETE' });
+  return res.json();
+}
+
+export async function updateScheduleSlot(slotId: string, data: { day_of_week?: number; start_time?: string; end_time?: string }) {
+  const res = await fetch(`${BASE}/api/schedule/${encodeURIComponent(slotId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
   return res.json();
 }
 

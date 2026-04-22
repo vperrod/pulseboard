@@ -23,6 +23,7 @@ export interface ScannedDevice {
 export interface UserProfile {
   id: string;
   name: string;
+  email: string;
   max_hr: number;
   device_address: string | null;
   device_name: string | null;

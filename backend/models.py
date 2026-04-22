@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 class User(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     name: str
+    email: str = ""
     max_hr: int = 190
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -86,6 +87,7 @@ class LeaderboardEntry(BaseModel):
 
 class RegisterRequest(BaseModel):
     name: str
+    email: str = ""
     max_hr: int = 190
 
 
@@ -108,6 +110,7 @@ class ScannedDevice(BaseModel):
 class UserProfile(BaseModel):
     id: str
     name: str
+    email: str = ""
     max_hr: int
     device_address: str | None = None
     device_name: str | None = None

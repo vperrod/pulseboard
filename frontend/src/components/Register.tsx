@@ -10,6 +10,7 @@ const bleSupported =
 export function Register() {
   const [step, setStep] = useState<Step>('form');
   const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
   const [maxHr, setMaxHr] = useState(190);
   const [age, setAge] = useState('');
   const [userId, setUserId] = useState('');
@@ -26,6 +27,7 @@ export function Register() {
           setProfile(p);
           setUserId(p.id);
           setName(p.name);
+          setEmail(p.email || '');
           setMaxHr(p.max_hr);
           if (p.device_address) {
             setStep('done');
@@ -43,9 +45,9 @@ export function Register() {
     try {
       let p: UserProfile;
       if (userId) {
-        p = await updateProfile(userId, name, computedMaxHr);
+        p = await updateProfile(userId, name, computedMaxHr, email);
       } else {
-        p = await registerUser(name, computedMaxHr);
+        p = await registerUser(name, computedMaxHr, email);
       }
       setUserId(p.id);
       setProfile(p);
@@ -124,6 +126,19 @@ export function Register() {
                   required
                   className="w-full bg-surface-alt border border-border rounded-xl px-4 py-2.5 text-text focus:outline-none focus:border-accent transition-colors"
                   placeholder="e.g. Alex"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-text-dim mb-1.5 uppercase tracking-wider">
+                  Email <span className="text-text-dim/50">(optional)</span>
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-surface-alt border border-border rounded-xl px-4 py-2.5 text-text focus:outline-none focus:border-accent transition-colors"
+                  placeholder="alex@example.com"
                 />
               </div>
 

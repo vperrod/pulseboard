@@ -96,6 +96,12 @@ async def init_db() -> None:
         if "paused" not in cols:
             await db.execute("ALTER TABLE sessions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
 
+        # Migrate existing users table if email column missing
+        cursor = await db.execute("PRAGMA table_info(users)")
+        user_cols = {row[1] for row in await cursor.fetchall()}
+        if "email" not in user_cols:
+            await db.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+
         # Seed default schedule if empty
         cursor = await db.execute("SELECT COUNT(*) FROM session_schedule")
         count = (await cursor.fetchone())[0]
@@ -116,8 +122,8 @@ async def init_db() -> None:
 async def create_user(user: User) -> User:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO users (id, name, max_hr, created_at) VALUES (?, ?, ?, ?)",
-            (user.id, user.name, user.max_hr, user.created_at.isoformat()),
+            "INSERT INTO users (id, name, email, max_hr, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user.id, user.name, user.email, user.max_hr, user.created_at.isoformat()),
         )
         await db.commit()
     return user
@@ -130,10 +136,10 @@ async def get_user(user_id: str) -> User | None:
         row = await cursor.fetchone()
         if not row:
             return None
-        return User(id=row["id"], name=row["name"], max_hr=row["max_hr"])
+        return User(id=row["id"], name=row["name"], email=row["email"] if "email" in row.keys() else "", max_hr=row["max_hr"])
 
 
-async def update_user(user_id: str, name: str | None = None, max_hr: int | None = None) -> User | None:
+async def update_user(user_id: str, name: str | None = None, email: str | None = None, max_hr: int | None = None) -> User | None:
     user = await get_user(user_id)
     if not user:
         return None
@@ -141,6 +147,9 @@ async def update_user(user_id: str, name: str | None = None, max_hr: int | None 
         if name is not None:
             await db.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
             user.name = name
+        if email is not None:
+            await db.execute("UPDATE users SET email = ? WHERE id = ?", (email, user_id))
+            user.email = email
         if max_hr is not None:
             await db.execute("UPDATE users SET max_hr = ? WHERE id = ?", (max_hr, user_id))
             user.max_hr = max_hr
@@ -153,7 +162,7 @@ async def list_users() -> list[User]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM users ORDER BY name")
         rows = await cursor.fetchall()
-        return [User(id=r["id"], name=r["name"], max_hr=r["max_hr"]) for r in rows]
+        return [User(id=r["id"], name=r["name"], email=r["email"] if "email" in r.keys() else "", max_hr=r["max_hr"]) for r in rows]
 
 
 async def delete_user(user_id: str) -> bool:
@@ -230,6 +239,16 @@ async def get_active_session() -> Session | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM sessions WHERE active = 1 ORDER BY created_at DESC LIMIT 1")
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return _row_to_session(row)
+
+
+async def get_session_by_id(session_id: str) -> Session | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
         row = await cursor.fetchone()
         if not row:
             return None
@@ -337,6 +356,33 @@ async def delete_schedule_slot(slot_id: str) -> bool:
         cursor = await db.execute("DELETE FROM session_schedule WHERE id = ?", (slot_id,))
         await db.commit()
         return cursor.rowcount > 0
+
+
+async def update_schedule_slot(
+    slot_id: str,
+    day_of_week: int | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> SessionScheduleSlot | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM session_schedule WHERE id = ?", (slot_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        new_day = day_of_week if day_of_week is not None else row["day_of_week"]
+        new_start = start_time if start_time is not None else row["start_time"]
+        new_end = end_time if end_time is not None else row["end_time"]
+        await db.execute(
+            "UPDATE session_schedule SET day_of_week = ?, start_time = ?, end_time = ? WHERE id = ?",
+            (new_day, new_start, new_end, slot_id),
+        )
+        await db.commit()
+        return SessionScheduleSlot(
+            id=slot_id, day_of_week=new_day,
+            start_time=new_start, end_time=new_end,
+            active=bool(row["active"]),
+        )
 
 
 # ── Scores ───────────────────────────────────────────────────────────

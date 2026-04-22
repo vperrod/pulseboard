@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   listUsers, updateProfile, deleteUser,
-  getSchedule, deleteScheduleSlot, addScheduleSlot,
+  getSchedule, deleteScheduleSlot, addScheduleSlot, updateScheduleSlot,
   startSession, stopSession, pauseSession, resumeSession,
-  getActiveSession,
+  getActiveSession, getSessionsByDate, getSessionDetail,
   getDailyLeaderboard, getWeeklyLeaderboard, getMonthlyLeaderboard,
   startDemo, stopDemo,
 } from '../api';
@@ -82,6 +82,25 @@ function SessionPanel() {
   const [sessionName, setSessionName] = useState('');
   const [loading, setLoading] = useState(true);
 
+  // Session history state
+  const [historyDate, setHistoryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [historySessions, setHistorySessions] = useState<Array<{
+    id: string; name: string; created_at: string; ended_at: string | null;
+    active: boolean; scheduled: boolean;
+  }>>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const [sessionDetail, setSessionDetail] = useState<{
+    session: { id: string; name: string; created_at: string; ended_at: string | null };
+    scores: Array<{
+      user_name: string; total_score: number;
+      zone_seconds: Record<string, number>;
+      avg_power: number | null; peak_hr: number;
+    }>;
+  } | null>(null);
+
+  const zoneColors = ['#94A3B8', '#3B82F6', '#22C55E', '#F97316', '#EF4444'];
+
   const refresh = useCallback(async () => {
     try {
       const data = await getActiveSession();
@@ -124,6 +143,32 @@ function SessionPanel() {
   async function handleDemoStop() {
     await stopDemo();
     await refresh();
+  }
+
+  async function loadHistory(date: string) {
+    setHistoryLoading(true);
+    try {
+      const sessions = await getSessionsByDate(date);
+      setHistorySessions(sessions);
+    } catch { /* ignore */ }
+    setHistoryLoading(false);
+  }
+
+  useEffect(() => { loadHistory(historyDate); }, [historyDate]);
+
+  async function toggleSessionDetail(sessionId: string) {
+    if (expandedSessionId === sessionId) {
+      setExpandedSessionId(null);
+      setSessionDetail(null);
+      return;
+    }
+    setExpandedSessionId(sessionId);
+    try {
+      const detail = await getSessionDetail(sessionId);
+      setSessionDetail(detail);
+    } catch {
+      setSessionDetail(null);
+    }
   }
 
   if (loading) return <div className="text-text-dim">Loading…</div>;
@@ -251,6 +296,119 @@ function SessionPanel() {
           </button>
         </div>
       </div>
+
+      {/* Session History */}
+      <div className="rounded-2xl border border-border bg-surface p-6">
+        <h3
+          className="text-lg font-semibold mb-4"
+          style={{ fontFamily: 'var(--font-display)' }}
+        >
+          Session History
+        </h3>
+
+        <div className="mb-4">
+          <label className="block text-xs text-text-dim mb-1 uppercase tracking-wider">Date</label>
+          <input
+            type="date"
+            value={historyDate}
+            onChange={(e) => { setHistoryDate(e.target.value); setExpandedSessionId(null); setSessionDetail(null); }}
+            className="bg-surface-alt border border-border rounded-xl px-3 py-2 text-sm text-text focus:outline-none focus:border-accent"
+          />
+        </div>
+
+        {historyLoading ? (
+          <div className="text-text-dim text-sm py-4 text-center">Loading…</div>
+        ) : historySessions.filter(s => !s.active).length === 0 ? (
+          <div className="text-center py-6">
+            <div className="text-3xl mb-2 opacity-20">📋</div>
+            <p className="text-text-dim text-sm">No completed sessions on this date.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {historySessions
+              .filter(s => !s.active)
+              .map((s) => {
+                const startTime = s.created_at ? new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+                const endTime = s.ended_at ? new Date(s.ended_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+                const isExpanded = expandedSessionId === s.id;
+
+                return (
+                  <div key={s.id} className="rounded-xl border border-border bg-surface-alt overflow-hidden">
+                    <button
+                      onClick={() => toggleSessionDetail(s.id)}
+                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-surface transition-colors text-left"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold">{s.name || s.id}</span>
+                        {s.scheduled && (
+                          <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent/10 text-accent font-semibold">
+                            Scheduled
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-text-dim text-xs">
+                        <span style={{ fontFamily: 'var(--font-mono)' }}>{startTime} → {endTime}</span>
+                        <span className="text-lg leading-none">{isExpanded ? '▾' : '▸'}</span>
+                      </div>
+                    </button>
+
+                    {isExpanded && sessionDetail && sessionDetail.session.id === s.id && (
+                      <div className="border-t border-border px-4 py-3">
+                        {sessionDetail.scores.length === 0 ? (
+                          <p className="text-text-dim text-sm text-center py-2">No participant data.</p>
+                        ) : (
+                          <>
+                            <div className="grid grid-cols-[30px_1fr_80px_100px_70px] gap-2 text-text-dim text-[10px] uppercase tracking-wider font-semibold mb-2">
+                              <div>#</div>
+                              <div>Name</div>
+                              <div className="text-right">Score</div>
+                              <div>Zones</div>
+                              <div className="text-right">Peak HR</div>
+                            </div>
+                            {sessionDetail.scores
+                              .sort((a, b) => b.total_score - a.total_score)
+                              .map((sc, i) => {
+                                const totalZone = Object.values(sc.zone_seconds).reduce((a, b) => a + b, 0);
+                                return (
+                                  <div key={i} className="grid grid-cols-[30px_1fr_80px_100px_70px] gap-2 py-1.5 items-center border-b border-border/30 last:border-0">
+                                    <div className="text-text-dim text-xs font-bold">
+                                      {i < 3 ? ['🥇', '🥈', '🥉'][i] : `#${i + 1}`}
+                                    </div>
+                                    <div className="text-sm font-medium truncate">{sc.user_name}</div>
+                                    <div className="text-right font-bold tabular-nums text-sm" style={{ fontFamily: 'var(--font-mono)' }}>
+                                      {Math.round(sc.total_score).toLocaleString()}
+                                    </div>
+                                    <div className="flex h-2 rounded-full overflow-hidden bg-white/5">
+                                      {[1, 2, 3, 4, 5].map((z) => {
+                                        const secs = sc.zone_seconds[String(z)] || 0;
+                                        const pct = totalZone > 0 ? (secs / totalZone) * 100 : 0;
+                                        return pct > 0 ? (
+                                          <div key={z} className="h-full" style={{ width: `${pct}%`, background: zoneColors[z - 1] }} />
+                                        ) : null;
+                                      })}
+                                    </div>
+                                    <div className="text-right text-xs tabular-nums text-text-dim" style={{ fontFamily: 'var(--font-mono)' }}>
+                                      {sc.peak_hr > 0 ? sc.peak_hr : '—'}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            <div className="mt-2 text-text-dim text-xs text-right">
+                              {sessionDetail.scores.length} participant{sessionDetail.scores.length !== 1 ? 's' : ''}
+                              {sessionDetail.scores.length > 0 && (
+                                <> · Total: {Math.round(sessionDetail.scores.reduce((sum, s) => sum + s.total_score, 0)).toLocaleString()} pts</>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -266,6 +424,10 @@ function SchedulePanel() {
   const [newDay, setNewDay] = useState(0);
   const [newStart, setNewStart] = useState('07:00');
   const [newEnd, setNewEnd] = useState('08:00');
+  const [editingSlotId, setEditingSlotId] = useState<string | null>(null);
+  const [editStart, setEditStart] = useState('');
+  const [editEnd, setEditEnd] = useState('');
+  const [editDay, setEditDay] = useState(0);
 
   async function load() {
     try {
@@ -284,6 +446,25 @@ function SchedulePanel() {
 
   async function handleDelete(id: string) {
     await deleteScheduleSlot(id);
+    setEditingSlotId(null);
+    await load();
+  }
+
+  function startSlotEdit(slot: SessionScheduleSlot) {
+    setEditingSlotId(slot.id);
+    setEditStart(slot.start_time);
+    setEditEnd(slot.end_time);
+    setEditDay(slot.day_of_week);
+  }
+
+  async function saveSlotEdit() {
+    if (!editingSlotId) return;
+    await updateScheduleSlot(editingSlotId, {
+      day_of_week: editDay,
+      start_time: editStart,
+      end_time: editEnd,
+    });
+    setEditingSlotId(null);
     await load();
   }
 
@@ -316,21 +497,71 @@ function SchedulePanel() {
                 {byDay[day]
                   .sort((a, b) => a.start_time.localeCompare(b.start_time))
                   .map((slot) => (
-                    <div
-                      key={slot.id}
-                      className="group relative text-[11px] font-mono tabular-nums px-2 py-1.5 rounded-lg bg-accent/10 border border-accent/20 text-accent text-center"
-                      style={{ fontFamily: 'var(--font-mono)' }}
-                    >
-                      {slot.start_time}
-                      <br />
-                      {slot.end_time}
-                      <button
-                        onClick={() => handleDelete(slot.id)}
-                        className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-red-500 text-white text-[9px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    editingSlotId === slot.id ? (
+                      <div
+                        key={slot.id}
+                        className="text-[11px] px-1 py-1.5 rounded-lg bg-accent/20 border-2 border-accent/50 space-y-1"
                       >
-                        ×
-                      </button>
-                    </div>
+                        <select
+                          value={editDay}
+                          onChange={(e) => setEditDay(Number(e.target.value))}
+                          className="w-full bg-surface-alt border border-border rounded px-1 py-0.5 text-[10px] text-text focus:outline-none focus:border-accent"
+                        >
+                          {DAY_NAMES.map((n, i) => (
+                            <option key={i} value={i}>{n}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="time"
+                          value={editStart}
+                          onChange={(e) => setEditStart(e.target.value)}
+                          className="w-full bg-surface-alt border border-border rounded px-1 py-0.5 text-[10px] text-text focus:outline-none focus:border-accent"
+                        />
+                        <input
+                          type="time"
+                          value={editEnd}
+                          onChange={(e) => setEditEnd(e.target.value)}
+                          className="w-full bg-surface-alt border border-border rounded px-1 py-0.5 text-[10px] text-text focus:outline-none focus:border-accent"
+                        />
+                        <div className="flex gap-1">
+                          <button
+                            onClick={saveSlotEdit}
+                            className="flex-1 px-1 py-0.5 rounded text-[9px] font-semibold bg-accent text-white hover:bg-accent/80 transition-colors"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingSlotId(null)}
+                            className="flex-1 px-1 py-0.5 rounded text-[9px] font-semibold border border-border text-text-dim hover:text-text transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        <button
+                          onClick={() => handleDelete(slot.id)}
+                          className="w-full px-1 py-0.5 rounded text-[9px] font-semibold border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        key={slot.id}
+                        onClick={() => startSlotEdit(slot)}
+                        className="group relative text-[11px] font-mono tabular-nums px-2 py-1.5 rounded-lg bg-accent/10 border border-accent/20 text-accent text-center cursor-pointer hover:bg-accent/20 transition-colors"
+                        style={{ fontFamily: 'var(--font-mono)' }}
+                      >
+                        {slot.start_time}
+                        <br />
+                        {slot.end_time}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDelete(slot.id); }}
+                          className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-red-500 text-white text-[9px] leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )
                   ))}
               </div>
             </div>
@@ -577,6 +808,7 @@ function UsersPanel() {
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
   const [editMaxHr, setEditMaxHr] = useState(190);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -593,12 +825,13 @@ function UsersPanel() {
   function startEdit(user: UserProfile) {
     setEditingId(user.id);
     setEditName(user.name);
+    setEditEmail(user.email || '');
     setEditMaxHr(user.max_hr);
     setConfirmDeleteId(null);
   }
 
   async function saveEdit(userId: string) {
-    await updateProfile(userId, editName, editMaxHr);
+    await updateProfile(userId, editName, editMaxHr, editEmail);
     setEditingId(null);
     await loadUsers();
   }
@@ -627,9 +860,10 @@ function UsersPanel() {
   }
 
   return (
-    <div className="rounded-2xl border border-border bg-surface overflow-hidden max-w-4xl">
-      <div className="grid grid-cols-[1fr_100px_1fr_140px] gap-4 px-5 py-3 border-b border-border text-text-dim text-xs font-semibold uppercase tracking-wider">
+    <div className="rounded-2xl border border-border bg-surface overflow-hidden max-w-5xl">
+      <div className="grid grid-cols-[1fr_1fr_80px_1fr_140px] gap-4 px-5 py-3 border-b border-border text-text-dim text-xs font-semibold uppercase tracking-wider">
         <div>Name</div>
+        <div>Email</div>
         <div>Max HR</div>
         <div>Device</div>
         <div className="text-right">Actions</div>
@@ -637,7 +871,7 @@ function UsersPanel() {
       {users.map((user) => (
         <div
           key={user.id}
-          className="grid grid-cols-[1fr_100px_1fr_140px] gap-4 px-5 py-3 border-b border-border/50 last:border-b-0 items-center hover:bg-surface-alt/50 transition-colors"
+          className="grid grid-cols-[1fr_1fr_80px_1fr_140px] gap-4 px-5 py-3 border-b border-border/50 last:border-b-0 items-center hover:bg-surface-alt/50 transition-colors"
         >
           {editingId === user.id ? (
             <>
@@ -647,6 +881,13 @@ function UsersPanel() {
                 onChange={(e) => setEditName(e.target.value)}
                 className="bg-surface-alt border border-border rounded-lg px-3 py-1.5 text-sm text-text focus:outline-none focus:border-accent"
                 autoFocus
+              />
+              <input
+                type="email"
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                className="bg-surface-alt border border-border rounded-lg px-3 py-1.5 text-sm text-text focus:outline-none focus:border-accent"
+                placeholder="email@example.com"
               />
               <input
                 type="number"
@@ -677,6 +918,7 @@ function UsersPanel() {
           ) : (
             <>
               <div className="font-medium">{user.name}</div>
+              <div className="text-text-dim text-sm truncate">{user.email || <span className="italic opacity-50">—</span>}</div>
               <div className="text-sm" style={{ fontFamily: 'var(--font-mono)' }}>{user.max_hr}</div>
               <div className="text-text-dim text-sm truncate">
                 {user.device_name
