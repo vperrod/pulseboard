@@ -18,7 +18,8 @@ export function useWebSocket(): WebSocketState {
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/live`);
+    const host = import.meta.env.DEV ? window.location.hostname + ':8000' : window.location.host;
+    const ws = new WebSocket(`${protocol}//${host}/ws/live`);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 48" fill="none" height="48">
+  <!-- Minimal ECG pulse line -->
+  <polyline
+    points="0,28 40,28 52,28 60,38 72,8 80,42 88,18 96,28 108,28 120,28"
+    stroke="#14B8A6"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    fill="none"
+  />
+  <!-- PulseBoard text -->
+  <text x="128" y="34" font-family="Outfit, sans-serif" font-weight="700" font-size="24" letter-spacing="-0.5">
+    <tspan fill="#14B8A6">Pulse</tspan><tspan fill="#e8e8f0">Board</tspan>
+  </text>
+</svg>

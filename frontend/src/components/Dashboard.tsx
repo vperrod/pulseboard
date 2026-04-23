@@ -4,6 +4,7 @@ import { useWebBluetooth } from '../hooks/useWebBluetooth';
 import { webPushMetric, setViewMode as apiSetViewMode, startSession, stopSession } from '../api';
 import { UserCard } from './UserCard';
 import { Leaderboard } from './Leaderboard';
+import { PulseLogoFull } from './PulseLogo';
 import type { ViewMode } from '../types';
 
 const VIEW_ICONS: Record<ViewMode, string> = {
@@ -52,12 +53,7 @@ export function Dashboard() {
       {/* Header */}
       <header className="mb-6 flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1
-            className="text-2xl md:text-3xl font-bold tracking-tight"
-            style={{ fontFamily: 'var(--font-display)' }}
-          >
-            <span className="text-accent">Pulse</span>Board
-          </h1>
+          <PulseLogoFull height={32} />
           <p className="text-text-dim text-sm mt-1">
             {activeSession ? (
               <>

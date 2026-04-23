@@ -52,7 +52,10 @@ class ConnectionManager:
         self.active.append(ws)
 
     def disconnect(self, ws: WebSocket) -> None:
-        self.active.remove(ws)
+        try:
+            self.active.remove(ws)
+        except ValueError:
+            pass
 
     async def broadcast(self, data: dict) -> None:
         dead: list[WebSocket] = []
@@ -723,9 +726,9 @@ async def daily_leaderboard(date: str | None = None):
     combined = sorted(all_scores.values(), key=lambda x: x["total_score"], reverse=True)
     for i, entry in enumerate(combined):
         entry["rank"] = i + 1
-        entry["avg_power"] = round(entry.pop("power_sum") / entry.pop("power_count"), 1) if entry["power_count"] > 0 else None
-        if "power_count" in entry:
-            del entry["power_count"]
+        ps = entry.pop("power_sum", 0.0)
+        pc = entry.pop("power_count", 0)
+        entry["avg_power"] = round(ps / pc, 1) if pc > 0 else None
 
     return {"date": target, "combined": combined, "sessions": session_details}
 
@@ -784,9 +787,9 @@ def _aggregate_scores(scores: list[SessionScore], start: str, end: str, period: 
     combined = sorted(agg.values(), key=lambda x: x["total_score"], reverse=True)
     for i, entry in enumerate(combined):
         entry["rank"] = i + 1
-        entry["avg_power"] = round(entry.pop("power_sum") / entry.pop("power_count"), 1) if entry["power_count"] > 0 else None
-        if "power_count" in entry:
-            del entry["power_count"]
+        ps = entry.pop("power_sum", 0.0)
+        pc = entry.pop("power_count", 0)
+        entry["avg_power"] = round(ps / pc, 1) if pc > 0 else None
 
     return {"period": period, "start": start, "end": end, "combined": combined}
 
@@ -828,6 +831,9 @@ async def websocket_live(ws: WebSocket):
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except Exception as exc:
+        logger.exception("WS error: %s", exc)
         manager.disconnect(ws)
 
 
