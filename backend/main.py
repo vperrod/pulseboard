@@ -868,7 +868,6 @@ async def _seed_historical_data() -> None:
 
     for days_ago in range(1, 15):
         day = now - timedelta(days=days_ago)
-        date_str = day.strftime("%Y-%m-%d")
         weekday = day.weekday()
 
         # Skip some weekend days randomly
