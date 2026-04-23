@@ -42,8 +42,8 @@ jobs:
         run: |
           az acr build \
             --registry pulseboardacr \
+            --image pulseboard:${{ github.sha }} \
             --image pulseboard:latest \
-            --no-logs \
             .
 
       - name: Deploy to Container App
@@ -51,4 +51,4 @@ jobs:
           az containerapp update \
             --name pulseboard-app \
             --resource-group pulseboard-rg \
-            --image pulseboardacr.azurecr.io/pulseboard:latest
+            --image pulseboardacr.azurecr.io/pulseboard:${{ github.sha }}
