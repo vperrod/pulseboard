@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import os
 import random
-import time as _time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend import database as db
@@ -22,7 +19,6 @@ from backend.hr_zones import calculate_zone
 from backend.models import (
     ClaimDeviceRequest,
     DeviceMapping,
-    LeaderboardEntry,
     LiveMetric,
     RegisterRequest,
     ScannedDevice,
@@ -750,7 +746,6 @@ async def weekly_leaderboard(date: str | None = None):
 @app.get("/api/leaderboards/monthly")
 async def monthly_leaderboard(year: int | None = None, month: int | None = None):
     """Get aggregated leaderboard for the given month."""
-    from datetime import timedelta
     now = datetime.now()
     y = year or now.year
     m = month or now.month

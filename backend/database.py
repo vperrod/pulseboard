@@ -314,7 +314,7 @@ async def get_sessions_by_range(start_date: str, end_date: str) -> list[Session]
 
 
 def _row_to_session(row) -> Session:
-    from datetime import datetime, UTC
+    from datetime import datetime
     ended_at = None
     if row["ended_at"]:
         try:

@@ -10,7 +10,6 @@ from typing import Any
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
-from bleak.backends.scanner import AdvertisementData
 
 logger = logging.getLogger("pulseboard.ble")
 
