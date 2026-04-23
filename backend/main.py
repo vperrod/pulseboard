@@ -8,7 +8,7 @@ import math
 import os
 import random
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -847,6 +847,84 @@ DEMO_USERS = [
 
 _demo_task: asyncio.Task | None = None
 
+# Session name templates for realistic demo history
+_DEMO_SESSION_NAMES = [
+    "06:30–07:30", "07:00–08:00", "09:00–10:00", "09:30–10:30",
+    "12:00–13:00", "17:00–18:00", "17:30–18:30", "18:00–19:00",
+    "19:00–20:00",
+]
+
+
+async def _seed_historical_data() -> None:
+    """Create 14 days of realistic past sessions with scores for demo mode."""
+    # Check if historical data already exists
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
+    existing = await db.get_sessions_by_date(yesterday)
+    if existing:
+        return  # already seeded
+
+    rng = random.Random(42)  # deterministic for consistency
+    now = datetime.now(UTC)
+
+    for days_ago in range(1, 15):
+        day = now - timedelta(days=days_ago)
+        date_str = day.strftime("%Y-%m-%d")
+        weekday = day.weekday()
+
+        # Skip some weekend days randomly
+        if weekday >= 5 and rng.random() < 0.3:
+            continue
+
+        # 1-2 sessions per day
+        n_sessions = rng.choice([1, 1, 2]) if weekday < 5 else 1
+        day_names = rng.sample(_DEMO_SESSION_NAMES, min(n_sessions, len(_DEMO_SESSION_NAMES)))
+
+        for sess_name in day_names[:n_sessions]:
+            hour = int(sess_name.split(":")[0])
+            session_time = day.replace(hour=hour, minute=rng.randint(0, 30), second=0, microsecond=0)
+            session = Session(name=sess_name, created_at=session_time, active=False, scheduled=True)
+            session.ended_at = session_time + timedelta(minutes=rng.randint(45, 65))
+            await db.create_session(session)
+
+            # Random subset of 4-8 demo users per session
+            n_participants = rng.randint(4, len(DEMO_USERS))
+            participants = rng.sample(DEMO_USERS, n_participants)
+
+            scores: list[SessionScore] = []
+            for u in participants:
+                user = User(name=u["name"], max_hr=u["max_hr"])
+                # Simulate ~50min of zone seconds (3000s total)
+                duration = rng.randint(2700, 3300)
+                z1 = rng.randint(int(duration * 0.05), int(duration * 0.15))
+                z2 = rng.randint(int(duration * 0.15), int(duration * 0.25))
+                z5 = rng.randint(int(duration * 0.02), int(duration * 0.10))
+                z4 = rng.randint(int(duration * 0.10), int(duration * 0.25))
+                z3 = duration - z1 - z2 - z4 - z5
+                if z3 < 0:
+                    z3 = rng.randint(int(duration * 0.10), int(duration * 0.20))
+
+                zone_seconds = {"1": z1, "2": z2, "3": z3, "4": z4, "5": z5}
+                # Score from zone points: z1*1 + z2*2 + z3*4 + z4*8 + z5*16
+                total_score = float(z1 * 1 + z2 * 2 + z3 * 4 + z4 * 8 + z5 * 16)
+
+                avg_power = round(rng.uniform(160, 280), 1) if u["has_power"] else None
+                peak_hr = min(u["max_hr"], u["base_hr"] + rng.randint(20, 45))
+
+                scores.append(SessionScore(
+                    session_id=session.id,
+                    user_id=user.id,
+                    user_name=u["name"],
+                    total_score=round(total_score, 1),
+                    zone_seconds=zone_seconds,
+                    avg_power=avg_power,
+                    peak_hr=peak_hr,
+                    created_at=session_time,
+                ))
+
+            await db.save_session_scores(scores)
+
+    logger.info("Demo: seeded %d days of historical data", 14)
+
 
 @app.post("/api/demo/start")
 async def start_demo():
@@ -869,6 +947,9 @@ async def start_demo():
             "rssi": random.randint(-70, -40),
             "services": ["0000180d-0000-1000-8000-00805f9b34fb"],
         }
+
+    # Seed historical data for leaderboard pages
+    await _seed_historical_data()
 
     # Start a demo session with scoring
     if not active_session:
